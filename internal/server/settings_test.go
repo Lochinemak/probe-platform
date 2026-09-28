@@ -86,6 +86,27 @@ func TestSettingsAPI(t *testing.T) {
 		t.Fatal("new password must work")
 	}
 
+	// Open mode: the request that enables the first login method keeps its
+	// author signed in as admin instead of locking them out.
+	st4, _ := OpenStore(filepath.Join(t.TempDir(), "open.db"))
+	defer st4.Close()
+	openCfg := Config{AgentToken: "tok", TaskTimeout: time.Minute, GuestAccess: true}
+	openSrv := httptest.NewServer(NewHandler(openCfg, hub, st4, emptyFS{}, mustSettings(t, st4, openCfg), nil, nil, discardLogger()))
+	defer openSrv.Close()
+	jar2, _ := cookiejar.New(nil)
+	c2 := &http.Client{Jar: jar2}
+	req, _ = http.NewRequest("PUT", openSrv.URL+"/api/settings", strings.NewReader(`{"base_url":"https://p.example.com","logto_endpoint":"https://auth.example.com","logto_app_id":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, _ := c2.Do(req); resp.StatusCode != 200 {
+		t.Fatalf("open-mode update: %d", resp.StatusCode)
+	}
+	if resp, _ := c2.Get(openSrv.URL + "/api/settings"); resp.StatusCode != 200 {
+		t.Fatalf("author must stay admin after enabling login: %d", resp.StatusCode)
+	}
+	if resp, _ := http.Get(openSrv.URL + "/api/settings"); resp.StatusCode != 401 {
+		t.Fatalf("everyone else is now a guest: %d", resp.StatusCode)
+	}
+
 	// Settings survive a reload from the store.
 	again := mustSettings(t, st, Config{})
 	if v := again.View(); v.LogtoAppID != "app1" || !v.LogtoSecretSet || v.PasswordSource != "dashboard" || v.GuestAccess {

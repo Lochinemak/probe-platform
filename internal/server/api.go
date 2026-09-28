@@ -318,9 +318,15 @@ func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}
+	wasOpen := !a.auth.enabled()
 	if err := a.settings.Update(p); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Enabling the first login method from open mode would otherwise turn the
+	// person doing it into a guest mid-setup; keep them signed in as admin.
+	if wasOpen && a.auth.enabled() && a.auth.sessionFrom(r) == nil {
+		a.auth.setCookie(w, r, Session{Role: roleAdmin, Name: a.settings.AdminUser(), Via: "bootstrap"})
 	}
 	a.log.Info("settings updated", "by", clientIP(r, a.cfg.TrustProxy))
 	writeJSON(w, http.StatusOK, a.settings.View())

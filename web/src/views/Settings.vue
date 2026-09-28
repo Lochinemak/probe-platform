@@ -109,7 +109,7 @@ onMounted(load)
           <div>Redirect URI</div><div class="mono">{{ view.logto_redirect_url || '（先在下方填写站点地址）' }} <button v-if="view.logto_redirect_url" type="button" class="btn link sm" @click="copy(view.logto_redirect_url)">复制</button></div>
           <div>Scopes</div><div class="mono">openid profile email</div>
         </div>
-        <p class="sub" style="margin:8px 0 0">把 Redirect URI 登记到 Logto 应用的「Redirect URIs」，保存后右上角登录框会出现「通过 Logto 登录」。</p>
+        <p class="sub" style="margin:8px 0 0">把 Redirect URI 登记到 Logto 应用的「Redirect URIs」，保存后右上角登录框会出现「通过 Logto 登录」。建议先设好管理员密码再启用 Logto：万一 Logto 配置有误，还能用密码登录回来改。</p>
       </div>
     </div>
 
