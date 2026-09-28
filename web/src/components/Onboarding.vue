@@ -26,6 +26,7 @@ const realToken = computed(() => token.value || '<agent token>')
 const maskedToken = computed(() => (showToken.value || !token.value) ? realToken.value : '••••••••••••' + token.value.slice(-4))
 function q(s) { s = String(s ?? ''); return /[\s"'$`\\]/.test(s) ? '"' + s.replace(/(["\\$`])/g, '\\$1') + '"' : (s || '""') }
 function yq(s) { return JSON.stringify(String(s ?? '')) }
+function pq(s) { return "'" + String(s ?? '').replace(/'/g, "''") + "'" } // PowerShell single-quoted literal
 
 function exportsBlock(real) {
   return [
@@ -34,6 +35,16 @@ function exportsBlock(real) {
     `export PROBE_NAME=${q(name.value)}`,
     `export PROBE_LOCATION=${q(loc.value)}`,
     `export PROBE_ISP=${q(isp.value)}`,
+  ].join('\n')
+}
+function powershellBlock(real) {
+  return [
+    `$env:PROBE_SERVER=${pq(serverURL)}`,
+    `$env:PROBE_TOKEN=${pq(real ? realToken.value : maskedToken.value)}`,
+    `$env:PROBE_NAME=${pq(name.value)}`,
+    `$env:PROBE_LOCATION=${pq(loc.value)}`,
+    `$env:PROBE_ISP=${pq(isp.value)}`,
+    'irm "$env:PROBE_SERVER/install-agent.ps1" | iex',
   ].join('\n')
 }
 function composeYaml(real, platform) {
@@ -65,6 +76,8 @@ const snippets = computed(() => [
     text: (real) => exportsBlock(real) + '\ncurl -fsSL $PROBE_SERVER/install-agent.sh | sudo -E sh' },
   { key: 'openwrt', title: 'OpenWrt / iStoreOS 路由器（procd，root 直接执行）',
     text: (real) => exportsBlock(real) + '\ncurl -fsSL $PROBE_SERVER/install-agent-openwrt.sh | sh' },
+  { key: 'windows', title: 'Windows 10 / 11 电脑（以管理员身份打开 PowerShell 粘贴；装成系统服务，开机自启、自动更新）',
+    text: (real) => powershellBlock(real) },
   { key: 'docker', title: 'Docker（Unraid / 任意 Linux；升级靠拉新镜像）',
     text: (real) => exportsBlock(real) + `\ndocker run -d --name probe-agent --restart unless-stopped \\
   --network host --cap-add NET_RAW \\
@@ -76,6 +89,15 @@ const snippets = computed(() => [
     text: (real) => exportsBlock(real) + `\ncurl -fsSL -H "Authorization: Bearer $PROBE_TOKEN" $PROBE_SERVER/api/agent/download/linux-arm64 -o probe-agent
 curl -fsSL $PROBE_SERVER/install-agent.sh -o install-agent.sh
 sudo -E sh install-agent.sh ./probe-agent` },
+  { key: 'uninstall', title: '卸载节点（脚本自动识别 systemd / OpenWrt；卸载后在节点列表删除记录）',
+    text: () => `# Linux（systemd）
+curl -fsSL ${serverURL}/uninstall-agent.sh | sudo sh
+# OpenWrt / iStoreOS（已是 root）
+curl -fsSL ${serverURL}/uninstall-agent.sh | sh
+# Windows（管理员 PowerShell）
+$env:PROBE_UNINSTALL='1'; irm ${pq(serverURL + '/install-agent.ps1')} | iex
+# Docker
+docker rm -f probe-agent` },
 ])
 
 async function copy(s) {
@@ -112,6 +134,7 @@ async function copy(s) {
     <p class="sub" v-if="downloads.length" style="margin-top:10px">本服务端自带的 agent 二进制（{{ serverVersion }}）：
       <a v-for="f in downloads" :key="f.key" :href="'/api/agent/download/' + f.key" style="margin-right:10px">{{ f.key }}</a>
     </p>
-    <p class="sub">验证探测能力：装好后在目标机器上执行 <code>sudo /var/lib/probe-agent/probe-agent test www.qq.com</code>（路由器：<code>probe-agent test www.qq.com</code>）。</p>
+    <p class="sub">验证探测能力：装好后在目标机器上执行 <code>sudo /var/lib/probe-agent/probe-agent test www.qq.com</code>（路由器：<code>probe-agent test www.qq.com</code>；Windows：<code>&amp; 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com</code>）。</p>
+    <p class="sub">Windows 说明：需要 Windows 10 / 11 或 Server 2016 以上，x64 / ARM64 / 32 位都有对应构建；不用装任何运行库（单个静态 exe，不依赖 .NET、VC++ 或 Npcap），脚本会自行检查管理员权限、系统版本和 CPU 架构。装到 <code>C:\ProgramData\probe-agent\</code>，服务名 <code>probe-agent</code>，日志在同目录 <code>probe-agent.log</code>；电脑睡眠时节点会离线，建议把「电源和睡眠」里的睡眠设为「从不」。</p>
   </div>
 </template>
