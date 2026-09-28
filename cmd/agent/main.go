@@ -159,11 +159,17 @@ func runSelfTest(args []string) int {
 				fmt.Fprintf(os.Stderr, "params must be key=value, got %q\n", kv)
 				return 2
 			}
-			if n, err := strconv.Atoi(v); err == nil {
+			switch k {
+			case "count", "interval_ms", "timeout_ms", "packet_size", "port", "max_hops", "expect_status", "expect_max_ms", "speed_seconds":
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s must be a number, got %q\n", k, v)
+					return 2
+				}
 				extra[k] = n
-			} else if v == "true" || v == "false" {
-				extra[k] = v == "true"
-			} else {
+			case "follow_redirects", "insecure_tls", "speed_test", "resolve":
+				extra[k] = v == "true" || v == "1"
+			default: // ip_version, protocol, method, record_type, dns_server, expect_keyword, body ...
 				extra[k] = v
 			}
 		}
