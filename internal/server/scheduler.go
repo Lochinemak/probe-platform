@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -106,14 +107,18 @@ func (s *Scheduler) onTaskDone(task protocol.Task, results []*protocol.AgentResu
 		return // deleted meanwhile
 	}
 	now := time.Now()
+	var outcomes []*agentOutcome
 	for _, r := range results {
 		sm := sampleFromResult(m, r, now)
 		if err := s.store.InsertSample(sm); err != nil {
 			s.log.Error("scheduler: store sample", "err", err)
 			continue
 		}
-		s.evaluate(m, r, sm)
+		if o := s.evaluate(m, r, sm, now); o != nil {
+			outcomes = append(outcomes, o)
+		}
 	}
+	s.notifyRun(m, outcomes, now)
 }
 
 // sampleFromResult reduces one agent's result to latency / loss / ok.
@@ -222,10 +227,25 @@ func sampleFromResult(m *protocol.Monitor, r *protocol.AgentResult, at time.Time
 	return sm
 }
 
-// evaluate applies the alert rule and sends notifications on transitions.
-func (s *Scheduler) evaluate(m *protocol.Monitor, r *protocol.AgentResult, sm *protocol.Sample) {
+// agentOutcome is one agent's verdict in a monitor run, collected so the
+// whole run goes out as a single notification.
+type agentOutcome struct {
+	label    string // name plus location / ISP
+	reason   string // why the alert rule failed; "" = passed
+	sample   *protocol.Sample
+	kind     string // "down" / "up" when this run changed the agent's alert state
+	failing  int    // consecutive failures including this run
+	need     int    // failures needed to alert
+	alerting bool   // alert state after this run
+	since    *time.Time
+}
+
+// evaluate applies the alert rule to one agent's sample, advances its alert
+// state and records a down / up event on transitions. It returns nil when
+// alerting is off or the state cannot be loaded.
+func (s *Scheduler) evaluate(m *protocol.Monitor, r *protocol.AgentResult, sm *protocol.Sample, now time.Time) *agentOutcome {
 	if !m.Alert.Enabled {
-		return
+		return nil
 	}
 	reason := ""
 	switch {
@@ -242,42 +262,47 @@ func (s *Scheduler) evaluate(m *protocol.Monitor, r *protocol.AgentResult, sm *p
 	st, err := s.store.GetState(m.ID, r.AgentID)
 	if err != nil {
 		s.log.Error("scheduler: load state", "err", err)
-		return
+		return nil
 	}
 	need := m.Alert.Consecutive
 	if need <= 0 {
 		need = 2
 	}
-	now := time.Now()
-	agentLabel := r.AgentName
-	if place := strings.TrimSpace(strings.Join([]string{r.Location, r.ISP}, " ")); place != "" {
-		agentLabel += "（" + place + "）"
+	label := r.AgentName
+	if label == "" {
+		label = r.AgentID
 	}
+	if place := strings.TrimSpace(strings.Join([]string{r.Location, r.ISP}, " ")); place != "" {
+		label += "（" + place + "）"
+	}
+	o := &agentOutcome{label: label, reason: reason, sample: sm, need: need}
 	if reason != "" {
 		st.Failing++
 		st.LastError = reason
 		if !st.Alerting && st.Failing >= need {
 			st.Alerting = true
 			st.Since = &now
-			msg := fmt.Sprintf("连续 %d 次失败：%s", st.Failing, reason)
-			s.fire(m, r, "down", agentLabel, msg, now)
+			o.kind = "down"
+			s.recordEvent(m, r, "down", fmt.Sprintf("连续 %d 次失败：%s", st.Failing, reason), now)
 		}
+		o.since = st.Since
 	} else {
 		if st.Alerting {
-			dur := ""
-			if st.Since != nil {
-				dur = "，持续 " + now.Sub(*st.Since).Round(time.Second).String()
-			}
-			s.fire(m, r, "up", agentLabel, "已恢复"+dur+describeSample(sm), now)
+			o.kind = "up"
+			o.since = st.Since
+			s.recordEvent(m, r, "up", "已恢复"+sinceText(st.Since, now, "，持续 ")+describeSample(sm), now)
 		}
 		st.Failing = 0
 		st.Alerting = false
 		st.Since = nil
 		st.LastError = ""
 	}
+	o.failing = st.Failing
+	o.alerting = st.Alerting
 	if err := s.store.SaveState(st); err != nil {
 		s.log.Error("scheduler: save state", "err", err)
 	}
+	return o
 }
 
 func describeSample(sm *protocol.Sample) string {
@@ -287,26 +312,100 @@ func describeSample(sm *protocol.Sample) string {
 	return ""
 }
 
-func (s *Scheduler) fire(m *protocol.Monitor, r *protocol.AgentResult, kind, agentLabel, detail string, at time.Time) {
-	ev := &protocol.AlertEvent{MonitorID: m.ID, AgentID: r.AgentID, Kind: kind, Message: detail, At: at}
+// sinceText renders how long an alert has lasted, prefixed; "" when unknown.
+func sinceText(since *time.Time, now time.Time, prefix string) string {
+	if since == nil {
+		return ""
+	}
+	return prefix + now.Sub(*since).Round(time.Second).String()
+}
+
+func (s *Scheduler) recordEvent(m *protocol.Monitor, r *protocol.AgentResult, kind, msg string, at time.Time) {
+	ev := &protocol.AlertEvent{MonitorID: m.ID, AgentID: r.AgentID, Kind: kind, Message: msg, At: at}
 	if err := s.store.InsertAlertEvent(ev); err != nil {
 		s.log.Error("scheduler: store alert", "err", err)
 	}
-	title := "【拨测告警】" + m.Name + " 异常"
-	if kind == "up" {
+	s.log.Info("alert", "kind", kind, "monitor", m.Name, "agent", r.AgentID, "detail", msg)
+}
+
+// notifyRun sends one message for a whole monitor run, listing every agent
+// that failed (with its error) and every agent that passed. Nothing is sent
+// unless at least one agent's alert state changed in this run, so a lasting
+// outage is reported once when it starts and once when it ends.
+func (s *Scheduler) notifyRun(m *protocol.Monitor, outcomes []*agentOutcome, at time.Time) {
+	changed := false
+	anyDown := false
+	var failed, passed []*agentOutcome
+	for _, o := range outcomes {
+		if o.kind != "" {
+			changed = true
+		}
+		if o.kind == "down" {
+			anyDown = true
+		}
+		if o.reason != "" {
+			failed = append(failed, o)
+		} else {
+			passed = append(passed, o)
+		}
+	}
+	if !changed {
+		return
+	}
+	byLabel := func(list []*agentOutcome) {
+		sort.SliceStable(list, func(i, j int) bool { return list[i].label < list[j].label })
+	}
+	byLabel(failed)
+	byLabel(passed)
+
+	total := len(outcomes)
+	var title string
+	switch {
+	case anyDown:
+		title = fmt.Sprintf("【拨测告警】%s 异常（%d/%d 节点失败）", m.Name, len(failed), total)
+	case len(failed) > 0:
+		title = fmt.Sprintf("【拨测恢复】%s 部分恢复（%d/%d 节点失败）", m.Name, len(failed), total)
+	default:
 		title = "【拨测恢复】" + m.Name + " 恢复正常"
 	}
-	lines := []string{
-		"目标：" + strings.ToUpper(string(m.Type)) + " " + m.Target,
-		"节点：" + agentLabel,
-		detail,
-		"时间：" + at.Format("2006-01-02 15:04:05"),
+
+	lines := []string{"目标：" + strings.ToUpper(string(m.Type)) + " " + m.Target}
+	if len(failed) > 0 {
+		lines = append(lines, fmt.Sprintf("失败 %d 个节点：", len(failed)))
+		for _, o := range failed {
+			var note string
+			switch {
+			case o.kind == "down":
+				note = fmt.Sprintf("新告警，连续 %d 次", o.failing)
+			case o.alerting:
+				note = "告警中" + sinceText(o.since, at, "，已持续 ")
+			default:
+				note = fmt.Sprintf("连续 %d 次，未达 %d 次告警条件", o.failing, o.need)
+			}
+			lines = append(lines, "· "+o.label+"："+o.reason+"（"+note+"）")
+		}
 	}
+	if len(passed) > 0 {
+		lines = append(lines, fmt.Sprintf("正常 %d 个节点：", len(passed)))
+		for _, o := range passed {
+			line := "· " + o.label
+			if o.sample.LatencyMs >= 0 {
+				line += fmt.Sprintf("：%.1f ms", o.sample.LatencyMs)
+				if o.sample.LossPct > 0 {
+					line += fmt.Sprintf("，丢包 %.0f%%", o.sample.LossPct)
+				}
+			}
+			if o.kind == "up" {
+				line += "（已恢复" + sinceText(o.since, at, "，异常持续 ") + "）"
+			}
+			lines = append(lines, line)
+		}
+	}
+	lines = append(lines, "时间："+at.Format("2006-01-02 15:04:05"))
 	if base := strings.TrimSuffix(s.baseURL(), "/"); base != "" {
 		lines = append(lines, "详情："+base+"/#/monitor/"+m.ID)
 	}
 	text := strings.Join(lines, "\n")
-	s.log.Info("alert", "kind", kind, "monitor", m.Name, "agent", r.AgentID, "detail", detail)
 	for _, id := range m.NotifyIDs {
 		ch, err := s.store.GetChannel(id)
 		if err != nil || !ch.Enabled {

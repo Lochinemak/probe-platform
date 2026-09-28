@@ -94,57 +94,97 @@ func TestAlertStateMachine(t *testing.T) {
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
 	s := NewScheduler(st, hub, NewNotifier(discardLogger()), func() string { return "https://probe.example.com" }, discardLogger())
 
-	res := &protocol.AgentResult{TaskID: "t", AgentID: "a1", AgentName: "home", Location: "广东 深圳", ISP: "电信"}
-	bad := &protocol.Sample{MonitorID: "m1", AgentID: "a1", OK: true, LatencyMs: 10, LossPct: 60}
-	good := &protocol.Sample{MonitorID: "m1", AgentID: "a1", OK: true, LatencyMs: 10, LossPct: 0}
+	agents := map[string]*protocol.AgentResult{
+		"a1": {AgentID: "a1", AgentName: "home", Location: "广东 深圳", ISP: "电信"},
+		"a2": {AgentID: "a2", AgentName: "nas"},
+		"a3": {AgentID: "a3", AgentName: "cloud"},
+	}
+	ping := func(loss float64) json.RawMessage {
+		return mustJSON(protocol.PingResult{Stats: protocol.Stats{Sent: 10, Received: 10 - int(loss/10), LossPct: loss, AvgMs: 10}})
+	}
+	// run finishes one monitor task; loss maps agent id -> loss %.
+	run := func(loss map[string]float64) {
+		var results []*protocol.AgentResult
+		for _, id := range []string{"a1", "a2", "a3"} {
+			r := *agents[id]
+			r.TaskID, r.Status, r.Data = "t", protocol.StatusDone, ping(loss[id])
+			results = append(results, &r)
+		}
+		s.onTaskDone(protocol.Task{ID: "t", MonitorID: "m1"}, results)
+	}
+	waitCalls := func(n int) []map[string]any {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			mu.Lock()
+			got := append([]map[string]any(nil), received...)
+			mu.Unlock()
+			if len(got) >= n || time.Now().After(deadline) {
+				time.Sleep(100 * time.Millisecond) // catch unexpected extras
+				mu.Lock()
+				got = append([]map[string]any(nil), received...)
+				mu.Unlock()
+				if len(got) != n {
+					t.Fatalf("expected %d webhook calls, got %d: %v", n, len(got), got)
+				}
+				return got
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 
-	s.evaluate(m, res, bad) // 1st failure: no alert yet
+	run(map[string]float64{"a1": 60, "a2": 60}) // 1st failure: no alert yet
 	state, _ := st.GetState("m1", "a1")
 	if state.Failing != 1 || state.Alerting {
 		t.Fatalf("after 1 failure: %+v", state)
 	}
-	s.evaluate(m, res, bad) // 2nd: fires
+	waitCalls(0)
+
+	run(map[string]float64{"a1": 60, "a2": 60}) // 2nd: both nodes alert, one message
 	state, _ = st.GetState("m1", "a1")
 	if state.Failing != 2 || !state.Alerting || state.Since == nil {
 		t.Fatalf("after 2 failures: %+v", state)
 	}
-	s.evaluate(m, res, bad)  // still alerting, no second notification
-	s.evaluate(m, res, good) // recovers
-	state, _ = st.GetState("m1", "a1")
-	if state.Failing != 0 || state.Alerting {
-		t.Fatalf("after recovery: %+v", state)
+	calls := waitCalls(1)
+	if title, _ := calls[0]["title"].(string); title != "【拨测告警】阿里DNS 异常（2/3 节点失败）" {
+		t.Fatalf("down title: %q", title)
 	}
+	text, _ := calls[0]["text"].(string)
+	if !containsAll(text, "失败 2 个节点", "· home（广东 深圳 电信）：丢包 60%，阈值 50%（新告警，连续 2 次）", "· nas：丢包 60%",
+		"正常 1 个节点", "· cloud：10.0 ms", "https://probe.example.com/#/monitor/m1") {
+		t.Fatalf("down text: %q", text)
+	}
+
+	run(map[string]float64{"a1": 60, "a2": 60}) // still alerting: nothing new
+	waitCalls(1)
+
+	run(map[string]float64{"a2": 60}) // home recovers, nas still down
+	calls = waitCalls(2)
+	var partial string
+	for _, c := range calls {
+		if title, _ := c["title"].(string); title == "【拨测恢复】阿里DNS 部分恢复（1/3 节点失败）" {
+			partial, _ = c["text"].(string)
+		}
+	}
+	if !containsAll(partial, "· nas：丢包 60%，阈值 50%（告警中，已持续", "· home（广东 深圳 电信）：10.0 ms（已恢复，异常持续") {
+		t.Fatalf("partial recovery: %q (all: %v)", partial, calls)
+	}
+
+	run(nil) // everyone healthy again
+	calls = waitCalls(3)
+	found := false
+	for _, c := range calls {
+		if title, _ := c["title"].(string); title == "【拨测恢复】阿里DNS 恢复正常" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("full recovery missing: %v", calls)
+	}
+
 	events, _ := st.ListAlertEvents("m1", 10)
-	if len(events) != 2 || events[0].Kind != "up" || events[1].Kind != "down" || events[1].Monitor != "阿里DNS" {
+	if len(events) != 4 || events[0].Kind != "up" || events[3].Kind != "down" || events[3].Monitor != "阿里DNS" {
 		t.Fatalf("events: %+v", events)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		mu.Lock()
-		n := len(received)
-		mu.Unlock()
-		if n == 2 || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(received) != 2 {
-		t.Fatalf("expected 2 webhook calls, got %d", len(received))
-	}
-	// Notifications are sent concurrently, so pick the "down" one by title.
-	var text string
-	for _, m := range received {
-		if title, _ := m["title"].(string); title == "【拨测告警】阿里DNS 异常" {
-			text, _ = m["text"].(string)
-		}
-	}
-	if text == "" {
-		t.Fatalf("down notification missing: %v", received)
-	}
-	if !containsAll(text, "home（广东 深圳 电信）", "丢包 60%", "https://probe.example.com/#/monitor/m1") {
-		t.Fatalf("notification text: %q", text)
 	}
 	if n, _ := st.AlertingCount(); n != 0 {
 		t.Fatalf("alerting count: %d", n)
