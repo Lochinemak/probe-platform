@@ -58,8 +58,22 @@ func TestAgentIDFromName(t *testing.T) {
 	}
 }
 
+func mustSettings(t *testing.T, st *Store, cfg Config) *Settings {
+	t.Helper()
+	s, err := LoadSettings(st, cfg, discardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 func TestSessionAuth(t *testing.T) {
-	a := newSessionAuth(Config{AdminPassword: "secret", AdminUser: "root", GuestAccess: true})
+	st, err := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a := newSessionAuth(mustSettings(t, st, Config{AdminPassword: "secret", AdminUser: "root", GuestAccess: true}))
 	tok, _ := a.issue(Session{Role: roleAdmin, Name: "root", Via: "password"})
 	sess, ok := a.parse(tok)
 	if !ok || sess.Role != roleAdmin || sess.Name != "root" {
@@ -68,9 +82,11 @@ func TestSessionAuth(t *testing.T) {
 	if _, ok := a.parse(tok + "x"); ok {
 		t.Fatal("tampered token must fail")
 	}
-	other := newSessionAuth(Config{AdminPassword: "different"})
+	st2, _ := OpenStore(filepath.Join(t.TempDir(), "t2.db"))
+	defer st2.Close()
+	other := newSessionAuth(mustSettings(t, st2, Config{AdminPassword: "different"}))
 	if _, ok := other.parse(tok); ok {
-		t.Fatal("token from another password must fail")
+		t.Fatal("token from another install must fail")
 	}
 	if !a.checkPassword("root", "secret") || a.checkPassword("admin", "secret") || a.checkPassword("root", "nope") {
 		t.Fatal("password check must require the configured username and password")
@@ -90,11 +106,13 @@ func TestSessionAuth(t *testing.T) {
 	if a.role(anon) != roleGuest {
 		t.Fatal("anonymous visitor is a guest when guest access is on")
 	}
-	strict := newSessionAuth(Config{AdminPassword: "secret", GuestAccess: false})
+	strict := newSessionAuth(mustSettings(t, st2, Config{AdminPassword: "secret", GuestAccess: false}))
 	if strict.role(anon) != "" {
 		t.Fatal("guest access off means anonymous must log in")
 	}
-	open := newSessionAuth(Config{})
+	st3, _ := OpenStore(filepath.Join(t.TempDir(), "t3.db"))
+	defer st3.Close()
+	open := newSessionAuth(mustSettings(t, st3, Config{}))
 	if open.role(anon) != roleAdmin {
 		t.Fatal("no admin login configured means open mode")
 	}
@@ -102,6 +120,16 @@ func TestSessionAuth(t *testing.T) {
 	withCookie.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
 	if a.role(withCookie) != roleAdmin {
 		t.Fatal("valid cookie must be admin")
+	}
+	// Dashboard-set password replaces the env one and logs existing sessions out.
+	if err := a.settings.SetPassword("newpassword"); err != nil {
+		t.Fatal(err)
+	}
+	if a.checkPassword("root", "secret") || !a.checkPassword("root", "newpassword") {
+		t.Fatal("new password must replace the env password")
+	}
+	if a.role(withCookie) != roleGuest {
+		t.Fatal("old session must be invalid after a password change")
 	}
 }
 
@@ -177,7 +205,7 @@ func TestAPIAuthGate(t *testing.T) {
 	defer st.Close()
 	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, GuestAccess: true}
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
-	h := NewHandler(cfg, hub, st, emptyFS{}, nil, nil, discardLogger())
+	h := NewHandler(cfg, hub, st, emptyFS{}, mustSettings(t, st, cfg), nil, nil, discardLogger())
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
@@ -210,7 +238,9 @@ func TestAPIAuthGate(t *testing.T) {
 	// Guest access off: everything needs a login.
 	strictCfg := cfg
 	strictCfg.GuestAccess = false
-	strictSrv := httptest.NewServer(NewHandler(strictCfg, hub, st, emptyFS{}, nil, nil, discardLogger()))
+	st2, _ := OpenStore(filepath.Join(t.TempDir(), "strict.db"))
+	defer st2.Close()
+	strictSrv := httptest.NewServer(NewHandler(strictCfg, hub, st2, emptyFS{}, mustSettings(t, st2, strictCfg), nil, nil, discardLogger()))
 	defer strictSrv.Close()
 	if resp, _ := http.Get(strictSrv.URL + "/api/agents"); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("strict guest agents: %d", resp.StatusCode)

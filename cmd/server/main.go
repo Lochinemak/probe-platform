@@ -48,9 +48,6 @@ func main() {
 			log.Info("agent token loaded", "file", filepath.Join(cfg.DataDir, "agent_token"))
 		}
 	}
-	if cfg.AdminPassword == "" {
-		log.Warn("PROBE_ADMIN_PASSWORD is empty: the dashboard has NO login. Set it before exposing the server to the internet.")
-	}
 
 	store, err := server.OpenStore(filepath.Join(cfg.DataDir, "probe.db"))
 	if err != nil {
@@ -65,10 +62,18 @@ func main() {
 	geo := server.NewGeoIP(cfg, log)
 	files := server.NewAgentFiles(cfg.AgentsDir, log)
 	hub := server.NewHub(cfg, store, geo, files, log)
+	settings, err := server.LoadSettings(store, cfg, log)
+	if err != nil {
+		log.Error("load settings", "err", err)
+		os.Exit(1)
+	}
+	if !settings.LoginEnabled() {
+		log.Warn("no admin login configured: the dashboard is OPEN to anyone who can reach it. Set PROBE_ADMIN_PASSWORD or configure Logto on the settings page.")
+	}
 	notifier := server.NewNotifier(log)
-	sched := server.NewScheduler(store, hub, notifier, cfg.BaseURL, log)
+	sched := server.NewScheduler(store, hub, notifier, settings.BaseURL, log)
 	go sched.Run(ctx)
-	handler := server.NewHandler(cfg, hub, store, web.Dist(), sched, notifier, log)
+	handler := server.NewHandler(cfg, hub, store, web.Dist(), settings, sched, notifier, log)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,

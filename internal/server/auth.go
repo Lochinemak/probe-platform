@@ -24,10 +24,11 @@ const (
 
 // Session is what the signed cookie carries.
 type Session struct {
-	Role string `json:"r"`
-	Name string `json:"n"`
-	Via  string `json:"v"` // password, logto
-	Exp  int64  `json:"e"`
+	Role  string `json:"r"`
+	Name  string `json:"n"`
+	Via   string `json:"v"` // password, logto
+	Exp   int64  `json:"e"`
+	Epoch int    `json:"p"` // bumped on password change to log everyone out
 }
 
 // sessionAuth issues and validates stateless HMAC cookies. The key derives
@@ -40,44 +41,36 @@ type Session struct {
 //   - admin login configured: anonymous visitors are guests when GuestAccess
 //     is on, otherwise everything needs a login.
 type sessionAuth struct {
-	enabled     bool
-	guestAccess bool
-	user        string
-	password    string
-	key         []byte
-	ttl         time.Duration
+	settings *Settings
+	ttl      time.Duration
 
 	mu       sync.Mutex
 	attempts map[string][]time.Time
 }
 
-func newSessionAuth(cfg Config) *sessionAuth {
-	sum := sha256.Sum256([]byte("probe-platform/session/" + cfg.AdminPassword + "|" + cfg.LogtoAppSecret + "|" + cfg.AgentToken))
-	user := cfg.AdminUser
-	if user == "" {
-		user = "admin"
-	}
-	return &sessionAuth{
-		enabled:     cfg.AdminPassword != "" || cfg.LogtoAppID != "",
-		guestAccess: cfg.GuestAccess,
-		user:        user,
-		password:    cfg.AdminPassword,
-		key:         sum[:],
-		ttl:         30 * 24 * time.Hour,
-		attempts:    map[string][]time.Time{},
-	}
+func newSessionAuth(settings *Settings) *sessionAuth {
+	return &sessionAuth{settings: settings, ttl: 30 * 24 * time.Hour, attempts: map[string][]time.Time{}}
+}
+
+func (s *sessionAuth) key() []byte {
+	sum := sha256.Sum256([]byte("probe-platform/session/" + s.settings.SessionSecret()))
+	return sum[:]
 }
 
 func (s *sessionAuth) sign(payload string) string {
-	m := hmac.New(sha256.New, s.key)
+	m := hmac.New(sha256.New, s.key())
 	m.Write([]byte(payload))
 	return hex.EncodeToString(m.Sum(nil))
 }
+
+func (s *sessionAuth) enabled() bool     { return s.settings.LoginEnabled() }
+func (s *sessionAuth) guestAccess() bool { return s.settings.GuestAccess() }
 
 // issue encodes and signs a session.
 func (s *sessionAuth) issue(sess Session) (string, time.Time) {
 	exp := time.Now().Add(s.ttl)
 	sess.Exp = exp.Unix()
+	sess.Epoch = s.settings.SessionEpoch()
 	b, _ := json.Marshal(sess)
 	payload := base64.RawURLEncoding.EncodeToString(b)
 	return payload + "." + s.sign(payload), exp
@@ -94,7 +87,7 @@ func (s *sessionAuth) parse(tok string) (Session, bool) {
 		return Session{}, false
 	}
 	var sess Session
-	if json.Unmarshal(b, &sess) != nil || time.Now().Unix() > sess.Exp || sess.Role == "" {
+	if json.Unmarshal(b, &sess) != nil || time.Now().Unix() > sess.Exp || sess.Role == "" || sess.Epoch != s.settings.SessionEpoch() {
 		return Session{}, false
 	}
 	return sess, true
@@ -116,13 +109,13 @@ func (s *sessionAuth) sessionFrom(r *http.Request) *Session {
 // role resolves the effective role of a request: "admin", "guest" or ""
 // (must log in).
 func (s *sessionAuth) role(r *http.Request) string {
-	if !s.enabled {
+	if !s.enabled() {
 		return roleAdmin // open mode
 	}
 	if sess := s.sessionFrom(r); sess != nil && sess.Role == roleAdmin {
 		return roleAdmin
 	}
-	if s.guestAccess {
+	if s.guestAccess() {
 		return roleGuest
 	}
 	return ""
@@ -130,15 +123,10 @@ func (s *sessionAuth) role(r *http.Request) string {
 
 func (s *sessionAuth) isAdmin(r *http.Request) bool { return s.role(r) == roleAdmin }
 
-func (s *sessionAuth) passwordLoginEnabled() bool { return s.password != "" }
+func (s *sessionAuth) passwordLoginEnabled() bool { return s.settings.PasswordLoginEnabled() }
 
 func (s *sessionAuth) checkPassword(user, pass string) bool {
-	if s.password == "" {
-		return false
-	}
-	u := subtle.ConstantTimeCompare([]byte(strings.TrimSpace(user)), []byte(s.user))
-	p := subtle.ConstantTimeCompare([]byte(pass), []byte(s.password))
-	return u == 1 && p == 1
+	return s.settings.CheckPassword(user, pass)
 }
 
 // allowAttempt rate-limits login attempts to 10 per minute per IP.

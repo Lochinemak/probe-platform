@@ -19,15 +19,18 @@ type Scheduler struct {
 	hub      *Hub
 	notifier *Notifier
 	log      *slog.Logger
-	baseURL  string // for links in notifications; may be empty
+	baseURL  func() string // for links in notifications; may return ""
 
 	mu      sync.Mutex
 	running map[string]bool // monitor ids with a task in flight
 }
 
 // NewScheduler wires the scheduler into the hub's task-done hook.
-func NewScheduler(store *Store, hub *Hub, notifier *Notifier, baseURL string, log *slog.Logger) *Scheduler {
-	s := &Scheduler{store: store, hub: hub, notifier: notifier, log: log, baseURL: strings.TrimSuffix(baseURL, "/"), running: map[string]bool{}}
+func NewScheduler(store *Store, hub *Hub, notifier *Notifier, baseURL func() string, log *slog.Logger) *Scheduler {
+	if baseURL == nil {
+		baseURL = func() string { return "" }
+	}
+	s := &Scheduler{store: store, hub: hub, notifier: notifier, log: log, baseURL: baseURL, running: map[string]bool{}}
 	hub.SetTaskDoneHook(s.onTaskDone)
 	return s
 }
@@ -299,8 +302,8 @@ func (s *Scheduler) fire(m *protocol.Monitor, r *protocol.AgentResult, kind, age
 		detail,
 		"时间：" + at.Format("2006-01-02 15:04:05"),
 	}
-	if s.baseURL != "" {
-		lines = append(lines, "详情："+s.baseURL+"/#/monitor/"+m.ID)
+	if base := strings.TrimSuffix(s.baseURL(), "/"); base != "" {
+		lines = append(lines, "详情："+base+"/#/monitor/"+m.ID)
 	}
 	text := strings.Join(lines, "\n")
 	s.log.Info("alert", "kind", kind, "monitor", m.Name, "agent", r.AgentID, "detail", detail)

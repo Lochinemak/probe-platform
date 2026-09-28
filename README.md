@@ -165,15 +165,15 @@ server（flag 或环境变量）：
 | `PROBE_LISTEN` | `:8080` | 监听地址 |
 | `PROBE_DATA_DIR` | `./data` | SQLite、token、ip2region 库所在目录 |
 | `PROBE_AGENT_TOKEN` | 自动生成 | agent 共享密钥 |
-| `PROBE_ADMIN_USER` / `PROBE_ADMIN_PASSWORD` | `admin` / 空 | 管理员用户名和密码；密码为空且未配 Logto 时为开放模式 |
-| `PROBE_GUEST` | `true` | 允许游客（未登录）发起拨测、查看结果 |
-| `PROBE_LOGTO_ENDPOINT` / `PROBE_LOGTO_APP_ID` / `PROBE_LOGTO_APP_SECRET` / `PROBE_LOGTO_ADMINS` | 空 | Logto 登录，见「访问控制」一节 |
+| `PROBE_ADMIN_USER` / `PROBE_ADMIN_PASSWORD` | `admin` / 空 | 引导用的管理员用户名和密码；之后在「设置」页修改 |
+| `PROBE_GUEST` | `true` | 引导值：允许游客发起拨测、查看结果（「设置」页可改） |
+| `PROBE_LOGTO_ENDPOINT` / `PROBE_LOGTO_APP_ID` / `PROBE_LOGTO_APP_SECRET` / `PROBE_LOGTO_ADMINS` | 空 | 引导值，建议直接在「设置」页配置 |
 | `PROBE_TRUST_PROXY` | `false` | 反向代理后设为 `true` |
 | `PROBE_GEOIP_ONLINE` | `true` | 用 ip-api.com 识别 agent 位置 |
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
 | `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒） |
 | `PROBE_RETAIN_DAYS` | `90` | 历史保留天数，0 为永久 |
-| `PROBE_BASE_URL` | 空 | Dashboard 公网地址，用于告警通知里的链接 |
+| `PROBE_BASE_URL` | 空 | 引导值：站点公网地址，用于告警链接和 Logto 回调（「设置 → 常规」可改） |
 | `PROBE_MONITOR_TASK_RETAIN_HOURS` | `48` | 定时监控每次运行的完整结果保留时长（小时） |
 | `PROBE_AGENTS_DIR` | 空（Docker 镜像内已设） | 存放 `probe-agent-<os>-<arch>` 二进制的目录，用于 agent 自更新与安装脚本下载 |
 | `PROBE_AGENT_IMAGE` | `ghcr.io/lochinemak/probe-agent:latest` | 节点页展示的 Docker 镜像名（大陆可填镜像站地址） |
@@ -252,21 +252,15 @@ deploy/                    Dockerfile、compose、systemd、安装脚本、反�
 
 ## 访问控制：游客与管理员
 
-- **未配置任何登录方式**（没有 `PROBE_ADMIN_PASSWORD` 也没有 Logto）：开放模式，所有人都是管理员，只适合内网。
-- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果和历史，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」页。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。`PROBE_GUEST=false` 可关闭游客访问，届时所有功能都需要登录。
+登录相关的配置都在 Dashboard 的「设置」页（管理员可见）修改，保存后立即生效、无需重启；环境变量只作为首次启动的引导值，页面里保存过的项以数据库为准。
+
+- **未配置任何登录方式**（既没有密码也没有 Logto）：开放模式，所有人都是管理员，只适合内网。首次部署请用 `PROBE_ADMIN_PASSWORD` 提供一个引导密码，登录后在「设置 → 管理员密码」里改成自己的（保存为 bcrypt 哈希，之后环境变量里的密码就不再起作用，可以删掉）。
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果和历史，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
 - **管理员**：右上角「管理员登录」。两种方式：
-  - 用户名 + 密码：`PROBE_ADMIN_USER`（默认 `admin`）和 `PROBE_ADMIN_PASSWORD`。
-  - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：
-
-    | 变量 | 说明 |
-    | --- | --- |
-    | `PROBE_LOGTO_ENDPOINT` | 租户地址，如 `https://auth.example.com`（会自动加 `/oidc`） |
-    | `PROBE_LOGTO_APP_ID` | Logto 应用 ID（类型选 Traditional Web） |
-    | `PROBE_LOGTO_APP_SECRET` | 应用密钥；留空则按公开应用只用 PKCE |
-    | `PROBE_LOGTO_ADMINS` | 允许成为管理员的用户，逗号分隔，可填 sub、邮箱或用户名；留空表示该租户的任何用户都是管理员 |
-    | `PROBE_BASE_URL` | 必填，回调地址为 `<BASE_URL>/api/auth/logto/callback`，需在 Logto 应用的 Redirect URIs 里登记 |
-
-  会话是 HMAC 签名的 Cookie，30 天有效；改密码、Logto 密钥或 agent token 会让所有会话失效。
+  - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
+  - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和可选的管理员名单（逗号分隔的邮箱 / 用户名 / sub，留空表示该 Logto 的任何用户都是管理员），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
+- 对应的引导环境变量：`PROBE_ADMIN_USER`、`PROBE_ADMIN_PASSWORD`、`PROBE_GUEST`、`PROBE_LOGTO_ENDPOINT`、`PROBE_LOGTO_APP_ID`、`PROBE_LOGTO_APP_SECRET`、`PROBE_LOGTO_ADMINS`、`PROBE_BASE_URL`、`PROBE_AGENT_IMAGE`。
+- 会话是 HMAC 签名的 Cookie（密钥随机生成并保存在数据库），30 天有效。
 
 ## 安全说明
 

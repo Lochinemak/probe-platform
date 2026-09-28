@@ -43,6 +43,10 @@ export const api = {
   updateChannel: (id, body) => request('PUT', `/api/notify/${encodeURIComponent(id)}`, body),
   deleteChannel: (id) => request('DELETE', `/api/notify/${encodeURIComponent(id)}`),
   testChannel: (id) => request('POST', `/api/notify/${encodeURIComponent(id)}/test`),
+  settings: () => request('GET', '/api/settings'),
+  updateSettings: (patch) => request('PUT', '/api/settings', patch),
+  changePassword: (current, next) => request('POST', '/api/settings/password', { current, new: next }),
+  testLogto: () => request('POST', '/api/settings/logto/test', {}),
 }
 
 // subscribe opens the SSE stream for a task. Returns a function that closes it.

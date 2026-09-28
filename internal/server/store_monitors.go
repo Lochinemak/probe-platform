@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS alert_events (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_monitor ON alert_events(monitor_id, at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_at ON alert_events(at DESC);
+CREATE TABLE IF NOT EXISTS settings (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notify_channels (
 	id         TEXT PRIMARY KEY,
 	name       TEXT NOT NULL,

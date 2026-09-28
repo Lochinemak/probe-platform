@@ -35,12 +35,12 @@ type API struct {
 
 	sched    *Scheduler // nil in tests / when disabled
 	notifier *Notifier
-	logto    *Logto // nil when not configured
+	settings *Settings
 }
 
 // NewHandler wires every route.
-func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
-	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(cfg), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, logto: NewLogto(cfg, log)}
+func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Settings, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
+	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(settings), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, settings: settings}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/agent", hub.HandleAgentWS)
 	mux.HandleFunc("GET /api/health", a.health)
@@ -71,6 +71,10 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, sched *Schedul
 	mux.Handle("PUT /api/notify/{id}", a.protect(a.updateChannel))
 	mux.Handle("DELETE /api/notify/{id}", a.protect(a.deleteChannel))
 	mux.Handle("POST /api/notify/{id}/test", a.protect(a.testChannel))
+	mux.Handle("GET /api/settings", a.protect(a.getSettings))
+	mux.Handle("PUT /api/settings", a.protect(a.updateSettings))
+	mux.Handle("POST /api/settings/password", a.protect(a.changePassword))
+	mux.Handle("POST /api/settings/logto/test", a.protect(a.testLogto))
 	mux.Handle("GET /api/agent/token", a.protect(a.agentToken))
 	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
@@ -257,26 +261,26 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) {
 	var user map[string]string
 	if sess := a.auth.sessionFrom(r); sess != nil {
 		user = map[string]string{"name": sess.Name, "via": sess.Via}
-	} else if !a.auth.enabled {
+	} else if !a.auth.enabled() {
 		user = map[string]string{"name": "admin", "via": "open"}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"auth_required": a.auth.enabled,
+		"auth_required": a.auth.enabled(),
 		"authenticated": role == roleAdmin,
 		"role":          role,
 		"user":          user,
-		"guest_enabled": a.auth.guestAccess,
+		"guest_enabled": a.auth.guestAccess(),
 		"login": map[string]bool{
 			"password": a.auth.passwordLoginEnabled(),
-			"logto":    a.logto != nil,
+			"logto":    a.settings.Logto() != nil,
 		},
 		"version":     buildinfo.Version,
-		"agent_image": a.cfg.AgentImage,
+		"agent_image": a.settings.AgentImage(),
 	})
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
-	if !a.auth.enabled {
+	if !a.auth.enabled() {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
@@ -298,19 +302,77 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
-	a.auth.setCookie(w, r, Session{Role: roleAdmin, Name: a.auth.user, Via: "password"})
+	a.auth.setCookie(w, r, Session{Role: roleAdmin, Name: a.settings.AdminUser(), Via: "password"})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// --- settings ---------------------------------------------------------------
+
+func (a *API) getSettings(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, a.settings.View())
+}
+
+func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var p SettingsPatch
+	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&p); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	if err := a.settings.Update(p); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.log.Info("settings updated", "by", clientIP(r, a.cfg.TrustProxy))
+	writeJSON(w, http.StatusOK, a.settings.View())
+}
+
+func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Current string `json:"current"`
+		New     string `json:"new"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	// A password-holder must prove the current one; a Logto-only admin may set the first password.
+	if a.settings.PasswordLoginEnabled() && !a.settings.CheckPassword(a.settings.AdminUser(), body.Current) {
+		writeErr(w, http.StatusUnauthorized, "当前密码不正确")
+		return
+	}
+	if err := a.settings.SetPassword(body.New); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.auth.clearCookie(w)
+	a.log.Info("admin password changed", "by", clientIP(r, a.cfg.TrustProxy))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "relogin": true})
+}
+
+// testLogto runs OIDC discovery for the saved Logto settings.
+func (a *API) testLogto(w http.ResponseWriter, r *http.Request) {
+	l := a.settings.Logto()
+	if l == nil {
+		writeErr(w, http.StatusBadRequest, "请先保存 Logto 地址、App ID 和站点地址")
+		return
+	}
+	if _, err := l.LoginURL(r.Context(), "test", "test-verifier-test-verifier-test-verifier-0000"); err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issuer": l.issuer, "redirect_url": l.RedirectURL()})
 }
 
 // logtoLogin starts the OIDC authorization code flow.
 func (a *API) logtoLogin(w http.ResponseWriter, r *http.Request) {
-	if a.logto == nil {
+	logto := a.settings.Logto()
+	if logto == nil {
 		writeErr(w, http.StatusNotFound, "logto login not configured")
 		return
 	}
 	state := randomHex(16)
 	verifier := randomHex(32)
-	u, err := a.logto.LoginURL(r.Context(), state, verifier)
+	u, err := logto.LoginURL(r.Context(), state, verifier)
 	if err != nil {
 		a.log.Error("logto login", "err", err)
 		http.Redirect(w, r, "/?login_error="+url.QueryEscape("Logto 不可用："+err.Error()), http.StatusFound)
@@ -326,7 +388,8 @@ func (a *API) logtoCallback(w http.ResponseWriter, r *http.Request) {
 		a.log.Warn("logto callback rejected", "reason", msg, "ip", clientIP(r, a.cfg.TrustProxy))
 		http.Redirect(w, r, "/?login_error="+url.QueryEscape(msg), http.StatusFound)
 	}
-	if a.logto == nil {
+	logto := a.settings.Logto()
+	if logto == nil {
 		fail("Logto 登录未配置")
 		return
 	}
@@ -340,12 +403,12 @@ func (a *API) logtoCallback(w http.ResponseWriter, r *http.Request) {
 		fail("登录状态已过期或不匹配，请重试")
 		return
 	}
-	id, err := a.logto.Exchange(r.Context(), q.Get("code"), st.Verifier)
+	id, err := logto.Exchange(r.Context(), q.Get("code"), st.Verifier)
 	if err != nil {
 		fail("换取令牌失败：" + err.Error())
 		return
 	}
-	if !a.logto.IsAdmin(id) {
+	if !logto.IsAdmin(id) {
 		fail("账号 " + id.DisplayName() + " 不在管理员名单中")
 		return
 	}

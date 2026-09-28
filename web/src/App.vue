@@ -6,6 +6,7 @@ import AgentsView from './views/Agents.vue'
 import HistoryView from './views/History.vue'
 import MonitorsView from './views/Monitors.vue'
 import NotifyView from './views/Notify.vue'
+import SettingsView from './views/Settings.vue'
 
 const tab = ref('probe')
 const session = ref(null)
@@ -44,6 +45,7 @@ function onUnauthorized() {
   showLogin.value = true
 }
 function openHistory(id) { historyTaskId.value = id; tab.value = 'history' }
+async function onRelogin(msg) { await loadSession(); loginError.value = msg || ''; showLogin.value = true; tab.value = 'probe' }
 
 onMounted(() => {
   const params = new URLSearchParams(location.search)
@@ -68,6 +70,7 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
         <button :class="{ active: tab === 'agents' }" @click="tab = 'agents'">节点</button>
         <button :class="{ active: tab === 'history' }" @click="tab = 'history'">历史</button>
         <button v-if="isAdmin" :class="{ active: tab === 'notify' }" @click="tab = 'notify'">通知</button>
+        <button v-if="isAdmin" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">设置</button>
       </nav>
       <div class="spacer"></div>
       <div class="meta" v-if="session">
@@ -113,6 +116,7 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
         <ProbeView v-show="tab === 'probe'" :role="session.role" @open-history="openHistory" />
         <MonitorsView v-if="tab === 'monitors' && isAdmin" @open-history="openHistory" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
+        <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
         <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" :admin="isAdmin" />
         <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" />
       </div>

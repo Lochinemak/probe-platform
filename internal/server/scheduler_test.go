@@ -92,7 +92,7 @@ func TestAlertStateMachine(t *testing.T) {
 	}
 	cfg := Config{AgentToken: "tok", TaskTimeout: time.Minute}
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
-	s := NewScheduler(st, hub, NewNotifier(discardLogger()), "https://probe.example.com", discardLogger())
+	s := NewScheduler(st, hub, NewNotifier(discardLogger()), func() string { return "https://probe.example.com" }, discardLogger())
 
 	res := &protocol.AgentResult{TaskID: "t", AgentID: "a1", AgentName: "home", Location: "广东 深圳", ISP: "电信"}
 	bad := &protocol.Sample{MonitorID: "m1", AgentID: "a1", OK: true, LatencyMs: 10, LossPct: 60}
@@ -133,10 +133,15 @@ func TestAlertStateMachine(t *testing.T) {
 	if len(received) != 2 {
 		t.Fatalf("expected 2 webhook calls, got %d", len(received))
 	}
-	title, _ := received[0]["title"].(string)
-	text, _ := received[0]["text"].(string)
-	if title != "【拨测告警】阿里DNS 异常" || text == "" {
-		t.Fatalf("first notification: %q %q", title, text)
+	// Notifications are sent concurrently, so pick the "down" one by title.
+	var text string
+	for _, m := range received {
+		if title, _ := m["title"].(string); title == "【拨测告警】阿里DNS 异常" {
+			text, _ = m["text"].(string)
+		}
+	}
+	if text == "" {
+		t.Fatalf("down notification missing: %v", received)
 	}
 	if !containsAll(text, "home（广东 深圳 电信）", "丢包 60%", "https://probe.example.com/#/monitor/m1") {
 		t.Fatalf("notification text: %q", text)

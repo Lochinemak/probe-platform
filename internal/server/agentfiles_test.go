@@ -77,7 +77,7 @@ func TestAgentDownloadAPI(t *testing.T) {
 	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, AgentsDir: dir}
 	files := NewAgentFiles(dir, discardLogger())
 	hub := NewHub(cfg, st, nil, files, discardLogger())
-	srv := httptest.NewServer(NewHandler(cfg, hub, st, emptyFS{}, nil, nil, discardLogger()))
+	srv := httptest.NewServer(NewHandler(cfg, hub, st, emptyFS{}, mustSettings(t, st, cfg), nil, nil, discardLogger()))
 	defer srv.Close()
 
 	get := func(path, token string) *http.Response {
