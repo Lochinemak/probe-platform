@@ -137,8 +137,9 @@ func newLogger(level string) *slog.Logger {
 // runSelfTest executes probes locally and prints JSON. It is the quickest way
 // to verify ICMP permissions on a new box.
 func runSelfTest(args []string) int {
-	types := []protocol.TaskType{protocol.TaskPing, protocol.TaskTCPing, protocol.TaskHTTP, protocol.TaskMTR}
+	types := []protocol.TaskType{protocol.TaskPing, protocol.TaskTCPing, protocol.TaskHTTP, protocol.TaskMTR, protocol.TaskDNS}
 	target := "1.1.1.1"
+	extra := map[string]any{}
 	switch len(args) {
 	case 0:
 	case 1:
@@ -146,11 +147,26 @@ func runSelfTest(args []string) int {
 	default:
 		t := protocol.TaskType(args[0])
 		if !t.Valid() {
-			fmt.Fprintf(os.Stderr, "unknown type %q (ping|tcping|http|mtr)\n", args[0])
+			fmt.Fprintf(os.Stderr, "unknown type %q (ping|tcping|http|mtr|dns)\n", args[0])
 			return 2
 		}
 		types = []protocol.TaskType{t}
 		target = args[1]
+		// Remaining args are params, e.g. protocol=tcp port=443 count=3 expect_keyword=hello
+		for _, kv := range args[2:] {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				fmt.Fprintf(os.Stderr, "params must be key=value, got %q\n", kv)
+				return 2
+			}
+			if n, err := strconv.Atoi(v); err == nil {
+				extra[k] = n
+			} else if v == "true" || v == "false" {
+				extra[k] = v == "true"
+			} else {
+				extra[k] = v
+			}
+		}
 	}
 	fmt.Fprintln(os.Stderr, "capabilities:", strings.Join(probe.DetectCapabilities(), ","))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -158,6 +174,16 @@ func runSelfTest(args []string) int {
 	code := 0
 	for _, typ := range types {
 		task := protocol.Task{ID: "selftest", Type: typ, Target: target, Params: protocol.Params{Count: 4}}
+		if len(extra) > 0 {
+			raw, _ := json.Marshal(extra)
+			if err := json.Unmarshal(raw, &task.Params); err != nil {
+				fmt.Fprintf(os.Stderr, "bad params: %v\n", err)
+				return 2
+			}
+		}
+		if typ == protocol.TaskDNS && len(extra) == 0 {
+			task.Params.Count = 1
+		}
 		if typ == protocol.TaskHTTP && !strings.Contains(target, "://") {
 			task.Target = "https://" + target
 		}

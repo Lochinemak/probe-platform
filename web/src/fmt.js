@@ -51,7 +51,12 @@ export function timeAgo(iso) {
   return `${Math.floor(diff / 86400)} 天前`
 }
 
-export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR' }
+export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR', dns: 'DNS' }
+
+export function mbps(v) {
+  if (v === undefined || v === null) return '-'
+  return v >= 100 ? Math.round(v) + ' Mbps' : v.toFixed(1) + ' Mbps'
+}
 
 // Compact label for an error message; the full text is shown in a popover.
 export function errorLabel(msg) {

@@ -11,6 +11,7 @@ defineProps({ task: Object, results: Array })
         <span class="name">{{ r.agent_name }}</span>
         <span class="sub">{{ agentPlace(r) }}</span>
         <span class="mono sub" v-if="r.ip">→ {{ r.ip }}</span>
+        <span class="badge" v-if="r.protocol">{{ r.protocol.toUpperCase() }}<template v-if="r.port">:{{ r.port }}</template></span>
         <span class="badge" v-if="r.rounds">{{ r.rounds }} 轮</span>
         <span class="badge ok" v-if="r.reached">已到达目标</span>
         <span class="badge warn" v-else-if="r.status === 'done'">未到达目标</span>

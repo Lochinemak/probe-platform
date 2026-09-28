@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -17,7 +18,10 @@ import (
 	"probe-platform/internal/protocol"
 )
 
-const maxBodyRead = 8 << 20 // read at most 8 MiB to time the transfer
+const (
+	maxBodyRead  = 8 << 20   // read at most 8 MiB to time the transfer
+	maxSpeedRead = 512 << 20 // hard cap for a speed-test download
+)
 
 // HTTP performs one or more HTTP requests against target and reports a phase
 // breakdown (DNS, TCP connect, TLS, TTFB, transfer) for each. When redirects
@@ -62,7 +66,7 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 		a := doHTTP(ctx, u.String(), method, p, timeout)
 		a.Seq = i
 		res.Attempts = append(res.Attempts, a)
-		if a.OK {
+		if a.OK && a.AssertOK {
 			rtts = append(rtts, a.Timing.TotalMs)
 		}
 		progress.emit("attempt", a)
@@ -187,7 +191,11 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 			if len(via) >= 10 {
 				return errors.New("too many redirects")
 			}
-			a.Redirects = append(a.Redirects, req.URL.String())
+			status := 0
+			if req.Response != nil {
+				status = req.Response.StatusCode
+			}
+			a.Redirects = append(a.Redirects, fmt.Sprintf("%d %s", status, req.URL.String()))
 			return nil
 		},
 	}
@@ -222,7 +230,31 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 	}
 	defer resp.Body.Close()
 
-	n, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodyRead))
+	// Body: normally read (and discard) up to 8 MiB to time the transfer.
+	// With a keyword to check, keep the bytes. With a speed test, keep
+	// downloading for the window and measure throughput.
+	var bodyBuf bytes.Buffer
+	var n int64
+	var readErr error
+	switch {
+	case p.SpeedTest:
+		window := time.Duration(clamp(def(p.SpeedSeconds, 5), 1, 60)) * time.Second
+		speedStart := time.Now()
+		var sink io.Writer = io.Discard
+		if p.ExpectKeyword != "" {
+			sink = &limitedWriter{w: &bodyBuf, n: maxBodyRead}
+		}
+		n, readErr = copyFor(ctx, sink, resp.Body, window, maxSpeedRead)
+		a.SpeedMs = ms(time.Since(speedStart))
+		a.SpeedBytes = n
+		if a.SpeedMs > 0 {
+			a.ThroughputMbps = round3(float64(n) * 8 / (a.SpeedMs / 1000) / 1e6)
+		}
+	case p.ExpectKeyword != "":
+		n, readErr = io.Copy(&bodyBuf, io.LimitReader(resp.Body, maxBodyRead))
+	default:
+		n, readErr = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodyRead))
+	}
 	end := time.Now()
 
 	clock.mu.Lock()
@@ -266,7 +298,86 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 		t.TransferMs = ms(end.Sub(clock.firstByte))
 	}
 	t.TotalMs = ms(end.Sub(clock.start))
+
+	a.Assertions, a.AssertOK = evalAssertions(p, &a, bodyBuf.Bytes())
 	return a
+}
+
+// evalAssertions applies the configured checks. When no status is expected,
+// anything below 400 passes.
+func evalAssertions(p protocol.Params, a *protocol.HTTPAttempt, body []byte) ([]protocol.Assertion, bool) {
+	var out []protocol.Assertion
+	ok := true
+	add := func(name string, pass bool, detail string) {
+		out = append(out, protocol.Assertion{Name: name, Pass: pass, Detail: detail})
+		if !pass {
+			ok = false
+		}
+	}
+	if p.ExpectStatus > 0 {
+		add("状态码", a.StatusCode == p.ExpectStatus, fmt.Sprintf("%d，期望 %d", a.StatusCode, p.ExpectStatus))
+	} else {
+		add("状态码", a.StatusCode < 400, fmt.Sprintf("%d，期望 < 400", a.StatusCode))
+	}
+	if p.ExpectKeyword != "" {
+		found := bytes.Contains(body, []byte(p.ExpectKeyword))
+		detail := "响应体包含 " + fmt.Sprintf("%q", p.ExpectKeyword)
+		if !found {
+			detail = fmt.Sprintf("响应体（前 %d 字节）不含 %q", len(body), p.ExpectKeyword)
+		}
+		add("关键字", found, detail)
+	}
+	if p.ExpectMaxMs > 0 {
+		add("耗时", a.Timing.TotalMs <= float64(p.ExpectMaxMs), fmt.Sprintf("%.0f ms，上限 %d ms", a.Timing.TotalMs, p.ExpectMaxMs))
+	}
+	return out, ok
+}
+
+// copyFor copies from r to w until the window elapses, EOF, or max bytes.
+func copyFor(ctx context.Context, w io.Writer, r io.Reader, window time.Duration, max int64) (int64, error) {
+	deadline := time.Now().Add(window)
+	buf := make([]byte, 64<<10)
+	var total int64
+	for total < max {
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return total, nil
+		}
+		n, err := r.Read(buf)
+		if n > 0 {
+			total += int64(n)
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return total, werr
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return total, nil
+			}
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+// limitedWriter keeps the first n bytes and silently drops the rest.
+type limitedWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.n <= 0 {
+		return len(p), nil
+	}
+	keep := p
+	if int64(len(keep)) > l.n {
+		keep = keep[:l.n]
+	}
+	l.n -= int64(len(keep))
+	if _, err := l.w.Write(keep); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func fillTLS(a *protocol.HTTPAttempt, cs *tls.ConnectionState) {

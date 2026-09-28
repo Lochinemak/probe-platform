@@ -13,13 +13,16 @@ const params = reactive({
   ping: { count: 10, interval_ms: 500, timeout_ms: 2000, packet_size: 56, ip_version: '' },
   tcping: { port: 80, count: 10, interval_ms: 500, timeout_ms: 3000, ip_version: '' },
   http: { method: 'GET', count: 1, timeout_ms: 10000, follow_redirects: true, insecure_tls: false, ip_version: '' },
-  mtr: { count: 10, max_hops: 30, timeout_ms: 1000, resolve: false, ip_version: '' },
+  mtr: { count: 10, max_hops: 30, timeout_ms: 1000, resolve: false, ip_version: '', protocol: 'icmp', port: 80 },
+  dns: { record_type: 'A', dns_server: '', count: 1, timeout_ms: 3000, ip_version: '' },
 })
+const httpExtra = reactive({ headers: '', body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, speed_test: false, speed_seconds: 5 })
 const placeholder = {
   ping: '例如 www.qq.com 或 223.5.5.5',
   tcping: '例如 www.qq.com:443（也可只填域名并在右侧指定端口）',
   http: '例如 https://www.baidu.com/',
   mtr: '例如 www.qq.com 或 1.1.1.1',
+  dns: '例如 www.qq.com（在各节点上解析，可指定 DNS 服务器）',
 }
 
 // --- agents ---
@@ -95,7 +98,21 @@ async function run() {
   if (selected.value.size === 0) { error.value = '请至少选择一个在线节点'; return }
   if (unsubscribe) { unsubscribe(); unsubscribe = null }
   const p = { ...params[type.value] }
-  for (const k of Object.keys(p)) if (p[k] === '' || p[k] === null) delete p[k]
+  if (type.value === 'http') {
+    const headers = {}
+    for (const line of httpExtra.headers.split('\n')) {
+      const i = line.indexOf(':')
+      if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+    }
+    if (Object.keys(headers).length) p.headers = headers
+    if (httpExtra.body && !['GET', 'HEAD'].includes(p.method)) p.body = httpExtra.body
+    if (httpExtra.expect_status > 0) p.expect_status = httpExtra.expect_status
+    if (httpExtra.expect_keyword) p.expect_keyword = httpExtra.expect_keyword
+    if (httpExtra.expect_max_ms > 0) p.expect_max_ms = httpExtra.expect_max_ms
+    if (httpExtra.speed_test) { p.speed_test = true; p.speed_seconds = httpExtra.speed_seconds }
+  }
+  if (type.value === 'mtr' && p.protocol === 'icmp') delete p.port
+  for (const k of Object.keys(p)) if (p[k] === '' || p[k] === null || p[k] === false) delete p[k]
   running.value = true
   results.value = []
   try {
@@ -137,12 +154,13 @@ onBeforeUnmount(() => { clearInterval(agentTimer); if (unsubscribe) unsubscribe(
     <div class="card">
       <div class="row" style="margin-bottom:14px">
         <div class="tabs">
-          <button v-for="t in ['ping', 'tcping', 'http', 'mtr']" :key="t" type="button" :class="{ active: type === t }" @click="type = t">{{ t.toUpperCase() }}</button>
+          <button v-for="t in ['ping', 'tcping', 'http', 'mtr', 'dns']" :key="t" type="button" :class="{ active: type === t }" @click="type = t">{{ t.toUpperCase() }}</button>
         </div>
         <span class="sub" v-if="type === 'ping'">ICMP 延迟与丢包</span>
         <span class="sub" v-else-if="type === 'tcping'">TCP 端口连通性与握手延迟</span>
         <span class="sub" v-else-if="type === 'http'">HTTP(S) 状态码与分阶段耗时</span>
-        <span class="sub" v-else>逐跳路由追踪（节点需具备 raw socket 权限）</span>
+        <span class="sub" v-else-if="type === 'mtr'">逐跳路由追踪，ICMP / TCP / UDP 三种探针（节点需具备 raw socket 权限）</span>
+        <span class="sub" v-else>各节点 DNS 解析对比：记录、TTL、RCode、耗时，可指定 DNS 服务器或 DoH</span>
         <span class="spacer"></span>
         <button class="btn sm" type="button" @click="showAdvanced = !showAdvanced">{{ showAdvanced ? '收起参数' : '高级参数' }}</button>
       </div>
@@ -173,14 +191,35 @@ onBeforeUnmount(() => { clearInterval(agentTimer); if (unsubscribe) unsubscribe(
         </template>
         <template v-else-if="type === 'http'">
           <div class="field"><label>方法</label>
-            <select v-model="params.http.method"><option v-for="m in ['GET', 'HEAD', 'POST', 'OPTIONS']" :key="m">{{ m }}</option></select>
+            <select v-model="params.http.method"><option v-for="m in ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']" :key="m">{{ m }}</option></select>
           </div>
           <div class="field"><label>次数</label><input type="number" min="1" max="20" v-model.number="params.http.count" /></div>
           <div class="field"><label>超时 (ms)</label><input type="number" min="1000" max="60000" v-model.number="params.http.timeout_ms" /></div>
           <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="params.http.follow_redirects" /> 跟随重定向</label>
           <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="params.http.insecure_tls" /> 忽略证书错误</label>
+          <div class="field" style="flex-basis:100%"></div>
+          <div class="field"><label>期望状态码（0 = 任意 &lt; 400）</label><input type="number" min="0" max="599" v-model.number="httpExtra.expect_status" /></div>
+          <div class="field"><label>响应体包含关键字</label><input type="text" v-model="httpExtra.expect_keyword" placeholder="留空不检查" /></div>
+          <div class="field"><label>总耗时上限 (ms，0 不检查)</label><input type="number" min="0" v-model.number="httpExtra.expect_max_ms" /></div>
+          <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="httpExtra.speed_test" /> 下载测速</label>
+          <div class="field" v-if="httpExtra.speed_test"><label>测速时长 (s)</label><input type="number" min="1" max="60" v-model.number="httpExtra.speed_seconds" /></div>
+          <div class="field" style="flex-basis:100%"></div>
+          <div class="field grow"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="httpExtra.headers" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>
+          <div class="field grow" v-if="!['GET', 'HEAD'].includes(params.http.method)"><label>请求体</label><textarea rows="2" v-model="httpExtra.body" spellcheck="false"></textarea></div>
+        </template>
+        <template v-else-if="type === 'dns'">
+          <div class="field"><label>记录类型</label>
+            <select v-model="params.dns.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SOA', 'SRV']" :key="t">{{ t }}</option></select>
+          </div>
+          <div class="field grow"><label>DNS 服务器（留空用节点系统 DNS）</label><input type="text" v-model="params.dns.dns_server" placeholder="223.5.5.5 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
+          <div class="field"><label>次数</label><input type="number" min="1" max="20" v-model.number="params.dns.count" /></div>
+          <div class="field"><label>超时 (ms)</label><input type="number" min="500" max="10000" v-model.number="params.dns.timeout_ms" /></div>
         </template>
         <template v-else>
+          <div class="field"><label>探针</label>
+            <select v-model="params.mtr.protocol"><option value="icmp">ICMP</option><option value="tcp">TCP SYN</option><option value="udp">UDP</option></select>
+          </div>
+          <div class="field" v-if="params.mtr.protocol !== 'icmp'"><label>端口</label><input type="number" min="1" max="65535" v-model.number="params.mtr.port" /></div>
           <div class="field"><label>轮数</label><input type="number" min="1" max="100" v-model.number="params.mtr.count" /></div>
           <div class="field"><label>最大跳数</label><input type="number" min="1" max="64" v-model.number="params.mtr.max_hops" /></div>
           <div class="field"><label>每跳超时 (ms)</label><input type="number" min="200" max="5000" v-model.number="params.mtr.timeout_ms" /></div>

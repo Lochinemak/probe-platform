@@ -46,8 +46,21 @@ export function derive(task, r) {
       // Average phase timings across successful attempts for the summary row.
       const phases = ['dns_ms', 'connect_ms', 'tls_ms', 'ttfb_ms', 'transfer_ms', 'total_ms']
       const okA = attempts.filter((a) => a.ok)
+      out.assertFail = attempts.some((a) => a.ok && a.assert_ok === false)
+      out.failedAssertions = attempts.flatMap((a) => (a.assertions || []).filter((x) => !x.pass).map((x) => `${x.name}：${x.detail}`))
+      const speeds = okA.map((a) => a.throughput_mbps).filter((v) => v > 0)
+      out.throughput = speeds.length ? speeds.reduce((s, v) => s + v, 0) / speeds.length : undefined
       out.avg = {}
       for (const k of phases) out.avg[k] = okA.length ? okA.reduce((s, a) => s + (a.timing?.[k] || 0), 0) / okA.length : undefined
+      break
+    }
+    case 'dns': {
+      let attempts = data?.attempts
+      if (!attempts) attempts = progress.filter((p) => p.kind === 'attempt').map((p) => p.data)
+      out.attempts = attempts
+      out.last = attempts[attempts.length - 1] || null
+      out.stats = data?.stats || { sent: attempts.length, received: attempts.filter((a) => a.ok).length }
+      out.fakeIP = attempts.some((a) => a.fake_ip)
       break
     }
     case 'mtr': {
@@ -60,6 +73,8 @@ export function derive(task, r) {
       out.ip = data?.ip || resolvedIP
       out.reached = data?.reached ?? hops.some((h) => h.reached)
       out.rounds = data?.rounds
+      out.protocol = data?.protocol || task.params?.protocol || 'icmp'
+      out.port = data?.port || task.params?.port
       break
     }
   }

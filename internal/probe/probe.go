@@ -10,8 +10,9 @@ import (
 )
 
 // ProgressFunc receives partial results while a probe runs. kind is one of
-// "reply" (ping/tcping: protocol.Reply), "attempt" (http: protocol.HTTPAttempt)
-// or "hops" (mtr: []protocol.MTRHop). "resolved" carries the resolved IP.
+// "reply" (ping/tcping: protocol.Reply), "attempt" (http: protocol.HTTPAttempt,
+// dns: protocol.DNSAttempt) or "hops" (mtr: []protocol.MTRHop). "resolved"
+// carries the resolved IP.
 type ProgressFunc func(kind string, data any)
 
 func (f ProgressFunc) emit(kind string, data any) {
@@ -31,6 +32,8 @@ func Run(ctx context.Context, task protocol.Task, progress ProgressFunc) (any, e
 		return HTTP(ctx, task.Target, task.Params, progress)
 	case protocol.TaskMTR:
 		return MTR(ctx, task.Target, task.Params, progress)
+	case protocol.TaskDNS:
+		return DNS(ctx, task.Target, task.Params, progress)
 	default:
 		return nil, fmt.Errorf("unknown task type %q", task.Type)
 	}

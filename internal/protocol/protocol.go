@@ -15,12 +15,13 @@ const (
 	TaskTCPing TaskType = "tcping"
 	TaskHTTP   TaskType = "http"
 	TaskMTR    TaskType = "mtr"
+	TaskDNS    TaskType = "dns"
 )
 
 // Valid reports whether t is a known task type.
 func (t TaskType) Valid() bool {
 	switch t {
-	case TaskPing, TaskTCPing, TaskHTTP, TaskMTR:
+	case TaskPing, TaskTCPing, TaskHTTP, TaskMTR, TaskDNS:
 		return true
 	}
 	return false
@@ -114,10 +115,20 @@ type Params struct {
 	Body            string            `json:"body,omitempty"`
 	FollowRedirects bool              `json:"follow_redirects,omitempty"`
 	InsecureTLS     bool              `json:"insecure_tls,omitempty"`
+	ExpectStatus    int               `json:"expect_status,omitempty"`  // 0 = any status below 400
+	ExpectKeyword   string            `json:"expect_keyword,omitempty"` // body must contain
+	ExpectMaxMs     int               `json:"expect_max_ms,omitempty"`  // total time must be below
+	SpeedTest       bool              `json:"speed_test,omitempty"`     // keep downloading to measure throughput
+	SpeedSeconds    int               `json:"speed_seconds,omitempty"`  // download window, default 5
 
 	// mtr
-	MaxHops int  `json:"max_hops,omitempty"`
-	Resolve bool `json:"resolve,omitempty"` // reverse-DNS hop addresses
+	MaxHops  int    `json:"max_hops,omitempty"`
+	Resolve  bool   `json:"resolve,omitempty"`  // reverse-DNS hop addresses
+	Protocol string `json:"protocol,omitempty"` // icmp (default), tcp, udp; Port applies to tcp/udp
+
+	// dns
+	RecordType string `json:"record_type,omitempty"` // A (default), AAAA, CNAME, MX, TXT, NS, PTR
+	DNSServer  string `json:"dns_server,omitempty"`  // "" = node's system resolver; ip, ip:port, or https://.../dns-query
 }
 
 // Task is a probe request created via the dashboard and dispatched to agents.
@@ -192,6 +203,13 @@ type HTTPTiming struct {
 	TotalMs    float64 `json:"total_ms"`
 }
 
+// Assertion is one pass/fail check applied to an HTTP response.
+type Assertion struct {
+	Name   string `json:"name"`
+	Pass   bool   `json:"pass"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // HTTPAttempt is one HTTP request/response.
 type HTTPAttempt struct {
 	Seq           int               `json:"seq"`
@@ -213,6 +231,14 @@ type HTTPAttempt struct {
 	CertIssuer    string            `json:"cert_issuer,omitempty"`
 	CertNotAfter  *time.Time        `json:"cert_not_after,omitempty"`
 	Timing        HTTPTiming        `json:"timing"`
+	// Assertions are the configured checks (status / keyword / max time);
+	// AssertOK is false when any of them failed.
+	Assertions []Assertion `json:"assertions,omitempty"`
+	AssertOK   bool        `json:"assert_ok"`
+	// Speed test: bytes read inside the download window and the resulting rate.
+	SpeedBytes     int64   `json:"speed_bytes,omitempty"`
+	SpeedMs        float64 `json:"speed_ms,omitempty"`
+	ThroughputMbps float64 `json:"throughput_mbps,omitempty"`
 }
 
 // HTTPResult is the payload for TaskHTTP.
@@ -241,11 +267,43 @@ type MTRHop struct {
 
 // MTRResult is the payload for TaskMTR.
 type MTRResult struct {
-	Target  string   `json:"target"`
-	IP      string   `json:"ip"`
-	Hops    []MTRHop `json:"hops"`
-	Reached bool     `json:"reached"`
-	Rounds  int      `json:"rounds"`
+	Target   string   `json:"target"`
+	IP       string   `json:"ip"`
+	Protocol string   `json:"protocol"` // icmp, tcp, udp
+	Port     int      `json:"port,omitempty"`
+	Hops     []MTRHop `json:"hops"`
+	Reached  bool     `json:"reached"`
+	Rounds   int      `json:"rounds"`
+}
+
+// DNSAnswer is one resource record from a DNS reply.
+type DNSAnswer struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	TTL   uint32 `json:"ttl"`
+	Value string `json:"value"`
+}
+
+// DNSAttempt is one DNS query.
+type DNSAttempt struct {
+	Seq       int         `json:"seq"`
+	OK        bool        `json:"ok"`
+	Error     string      `json:"error,omitempty"`
+	Server    string      `json:"server"`
+	Proto     string      `json:"proto"` // udp, tcp, doh
+	RTTMs     float64     `json:"rtt_ms"`
+	RCode     string      `json:"rcode,omitempty"`
+	Truncated bool        `json:"truncated,omitempty"`
+	Answers   []DNSAnswer `json:"answers"`
+	FakeIP    bool        `json:"fake_ip,omitempty"` // an A answer fell in 198.18.0.0/15
+}
+
+// DNSResult is the payload for TaskDNS.
+type DNSResult struct {
+	Target     string       `json:"target"`
+	RecordType string       `json:"record_type"`
+	Attempts   []DNSAttempt `json:"attempts"`
+	Stats      Stats        `json:"stats"`
 }
 
 // ---------------------------------------------------------------------------

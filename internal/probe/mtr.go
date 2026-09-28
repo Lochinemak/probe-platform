@@ -3,11 +3,13 @@ package probe
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"sort"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -17,9 +19,21 @@ import (
 	"probe-platform/internal/protocol"
 )
 
-// MTR is a native traceroute-with-statistics implementation (ICMP echo,
-// increasing TTL, several rounds). It needs a raw ICMP socket, i.e. root or
-// CAP_NET_RAW on Linux. IPv4 and IPv6 are both supported.
+// MTR is a native traceroute-with-statistics implementation: several rounds
+// of probes with increasing TTL. Three probe flavours share one engine:
+//
+//   - icmp: echo requests; hops answer Time Exceeded, the destination answers
+//     Echo Reply. Matched by ICMP id/seq.
+//   - udp:  one datagram per probe from its own socket to Port (default 33434);
+//     hops answer Time Exceeded quoting our source port, the destination
+//     answers Port Unreachable (or a datagram) — reached.
+//   - tcp:  one connect() per probe with the socket's TTL set; hops answer
+//     Time Exceeded quoting our source port, the destination completes or
+//     refuses the handshake — reached. Looks like real traffic to firewalls
+//     that drop ICMP/UDP.
+//
+// All flavours need a raw ICMP socket (root or CAP_NET_RAW) to see the
+// Time Exceeded replies. IPv4 and IPv6 are both supported.
 //
 // progress receives "resolved" (the IP string) and then a "hops" event with a
 // full []protocol.MTRHop snapshot after every round.
@@ -29,6 +43,22 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 	timeout := time.Duration(def(p.TimeoutMs, 1000)) * time.Millisecond
 	interval := time.Duration(def(p.IntervalMs, 100)) * time.Millisecond
 	const sendGap = 15 * time.Millisecond // be gentle with ICMP rate limits on routers
+
+	mode := strings.ToLower(strings.TrimSpace(p.Protocol))
+	if mode == "" {
+		mode = "icmp"
+	}
+	port := p.Port
+	switch mode {
+	case "icmp":
+		port = 0
+	case "tcp":
+		port = def(port, 80)
+	case "udp":
+		port = def(port, 33434)
+	default:
+		return nil, fmt.Errorf("unsupported mtr protocol %q (icmp, tcp, udp)", p.Protocol)
+	}
 
 	dst, err := Resolve(ctx, target, p.IPVersion)
 	if err != nil {
@@ -43,10 +73,14 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 	}
 	defer conn.Close()
 
-	id := uint16(rand.IntN(0xfffe) + 1)
-	pend := &pendingMap{m: map[uint16]pendingProbe{}}
-	replies := make(chan mtrReply, 4096)
-	go mtrReader(conn, v6, id, dst, pend, replies)
+	eng := &mtrEngine{
+		ctx: ctx, mode: mode, v6: v6, dst: dst, port: port, timeout: timeout,
+		icmpConn: conn, id: uint16(rand.IntN(0xfffe) + 1),
+		pend:    &pendingMap{m: map[uint16]pendingProbe{}},
+		replies: make(chan mtrReply, 4096),
+	}
+	defer eng.pend.clear()
+	go eng.reader()
 
 	hops := make([]*hopAcc, maxHops+1)
 	for i := range hops {
@@ -54,11 +88,6 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 	}
 	reachedTTL := 0
 	var seq uint16
-	payload := make([]byte, 32)
-	for i := range payload {
-		payload[i] = byte(i)
-	}
-	dstAddr := &net.IPAddr{IP: dst}
 	roundsRun := 0
 
 	for round := 0; round < rounds && ctx.Err() == nil; round++ {
@@ -69,26 +98,17 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 		outstanding := 0
 		for ttl := 1; ttl <= limit; ttl++ {
 			seq++
-			if err := setTTL(conn, v6, ttl); err != nil {
-				return nil, fmt.Errorf("set ttl: %w", err)
-			}
-			b, err := echoMessage(v6, id, seq, payload)
-			if err != nil {
-				return nil, err
-			}
-			pend.add(seq, pendingProbe{ttl: ttl, sentAt: time.Now()})
-			hops[ttl].sent++
-			if _, err := conn.WriteTo(b, dstAddr); err != nil {
-				pend.take(seq)
-				hops[ttl].sent--
+			if err := eng.send(ttl, seq); err != nil {
+				if errors.Is(err, errUnsupported) {
+					return nil, err
+				}
 				continue
 			}
+			hops[ttl].sent++
 			outstanding++
-			// Drain replies that already arrived so the channel never blocks
-			// the reader.
 			for drained := true; drained; {
 				select {
-				case r := <-replies:
+				case r := <-eng.replies:
 					applyReply(hops, r, dst, &reachedTTL)
 					outstanding--
 				default:
@@ -104,7 +124,7 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 	wait:
 		for outstanding > 0 {
 			select {
-			case r := <-replies:
+			case r := <-eng.replies:
 				applyReply(hops, r, dst, &reachedTTL)
 				outstanding--
 			case <-deadline.C:
@@ -114,7 +134,7 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 			}
 		}
 		deadline.Stop()
-		pend.clear() // anything still pending is lost
+		eng.pend.clear() // anything still pending is lost; sockets closed
 		roundsRun++
 
 		progress.emit("hops", snapshotHops(hops, effectiveEnd(hops, maxHops, reachedTTL), reachedTTL))
@@ -127,17 +147,21 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 
 	end := effectiveEnd(hops, maxHops, reachedTTL)
 	res := &protocol.MTRResult{
-		Target:  target,
-		IP:      dst.String(),
-		Hops:    snapshotHops(hops, end, reachedTTL),
-		Reached: reachedTTL > 0,
-		Rounds:  roundsRun,
+		Target:   target,
+		IP:       dst.String(),
+		Protocol: mode,
+		Port:     port,
+		Hops:     snapshotHops(hops, end, reachedTTL),
+		Reached:  reachedTTL > 0,
+		Rounds:   roundsRun,
 	}
 	if p.Resolve {
 		reverseResolve(ctx, res.Hops)
 	}
 	return res, nil
 }
+
+var errUnsupported = errors.New("unsupported on this platform")
 
 // effectiveEnd decides how many hops to report: up to the destination if it
 // answered, otherwise up to the last responding hop plus a couple of silent
@@ -246,7 +270,7 @@ func reverseResolve(ctx context.Context, hops []protocol.MTRHop) {
 				names, err := net.DefaultResolver.LookupAddr(rctx, ip)
 				if err == nil && len(names) > 0 {
 					mu.Lock()
-					cache[ip] = trimDot(names[0])
+					cache[ip] = strings.TrimSuffix(names[0], ".")
 					mu.Unlock()
 				}
 			}(ip)
@@ -261,18 +285,12 @@ func reverseResolve(ctx context.Context, hops []protocol.MTRHop) {
 	}
 }
 
-func trimDot(s string) string {
-	if n := len(s); n > 0 && s[n-1] == '.' {
-		return s[:n-1]
-	}
-	return s
-}
-
-// --- raw socket plumbing ----------------------------------------------------
+// --- engine -----------------------------------------------------------------
 
 type pendingProbe struct {
 	ttl    int
 	sentAt time.Time
+	cancel func() // closes the per-probe socket (tcp/udp); nil for icmp
 }
 
 type pendingMap struct {
@@ -280,34 +298,313 @@ type pendingMap struct {
 	m  map[uint16]pendingProbe
 }
 
-func (p *pendingMap) add(seq uint16, pr pendingProbe) {
+func (p *pendingMap) add(key uint16, pr pendingProbe) {
 	p.mu.Lock()
-	p.m[seq] = pr
+	p.m[key] = pr
 	p.mu.Unlock()
 }
 
-func (p *pendingMap) take(seq uint16) (pendingProbe, bool) {
+func (p *pendingMap) take(key uint16) (pendingProbe, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	pr, ok := p.m[seq]
+	pr, ok := p.m[key]
 	if ok {
-		delete(p.m, seq)
+		delete(p.m, key)
 	}
 	return pr, ok
 }
 
 func (p *pendingMap) clear() {
 	p.mu.Lock()
+	old := p.m
 	p.m = map[uint16]pendingProbe{}
 	p.mu.Unlock()
+	for _, pr := range old {
+		if pr.cancel != nil {
+			pr.cancel()
+		}
+	}
 }
 
 type mtrReply struct {
 	ttl     int
 	from    net.IP
 	rtt     time.Duration
-	reached bool // echo reply (as opposed to time-exceeded / unreachable)
+	reached bool
 }
+
+type mtrEngine struct {
+	ctx      context.Context
+	mode     string // icmp, tcp, udp
+	v6       bool
+	dst      net.IP
+	port     int
+	timeout  time.Duration
+	icmpConn *icmp.PacketConn
+	id       uint16
+	pend     *pendingMap
+	replies  chan mtrReply
+	sendMu   sync.Mutex
+}
+
+// send launches one probe for ttl. The pending entry is keyed by the ICMP
+// sequence (icmp) or by the probe socket's source port (tcp/udp).
+func (e *mtrEngine) send(ttl int, seq uint16) error {
+	switch e.mode {
+	case "icmp":
+		return e.sendICMP(ttl, seq)
+	case "udp":
+		return e.sendUDP(ttl)
+	case "tcp":
+		return e.sendTCP(ttl)
+	}
+	return errUnsupported
+}
+
+func (e *mtrEngine) sendICMP(ttl int, seq uint16) error {
+	payload := make([]byte, 32)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	b, err := echoMessage(e.v6, e.id, seq, payload)
+	if err != nil {
+		return err
+	}
+	e.sendMu.Lock()
+	defer e.sendMu.Unlock()
+	if err := setTTL(e.icmpConn, e.v6, ttl); err != nil {
+		return fmt.Errorf("set ttl: %w", err)
+	}
+	e.pend.add(seq, pendingProbe{ttl: ttl, sentAt: time.Now()})
+	if _, err := e.icmpConn.WriteTo(b, &net.IPAddr{IP: e.dst}); err != nil {
+		e.pend.take(seq)
+		return err
+	}
+	return nil
+}
+
+func (e *mtrEngine) sendUDP(ttl int) error {
+	network, laddr := "udp4", &net.UDPAddr{IP: net.IPv4zero}
+	if e.v6 {
+		network, laddr = "udp6", &net.UDPAddr{IP: net.IPv6unspecified}
+	}
+	conn, err := net.ListenUDP(network, laddr)
+	if err != nil {
+		return err
+	}
+	if e.v6 {
+		err = ipv6.NewPacketConn(conn).SetHopLimit(ttl)
+	} else {
+		err = ipv4.NewPacketConn(conn).SetTTL(ttl)
+	}
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("set ttl: %w", err)
+	}
+	lport := uint16(conn.LocalAddr().(*net.UDPAddr).Port)
+	e.pend.add(lport, pendingProbe{ttl: ttl, sentAt: time.Now(), cancel: func() { conn.Close() }})
+	if _, err := conn.WriteTo([]byte("probe-platform mtr"), &net.UDPAddr{IP: e.dst, Port: e.port}); err != nil {
+		e.pend.take(lport)
+		conn.Close()
+		return err
+	}
+	// A datagram back from the destination (e.g. a DNS server answering) means reached.
+	go func() {
+		buf := make([]byte, 1500)
+		_ = conn.SetReadDeadline(time.Now().Add(e.timeout))
+		_, addr, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		if ua, ok := addr.(*net.UDPAddr); ok && ua.IP.Equal(e.dst) {
+			if pr, ok := e.pend.take(lport); ok {
+				e.replies <- mtrReply{ttl: pr.ttl, from: e.dst, rtt: time.Since(pr.sentAt), reached: true}
+			}
+		}
+	}()
+	return nil
+}
+
+func (e *mtrEngine) sendTCP(ttl int) error {
+	ctx, cancel := context.WithTimeout(e.ctx, e.timeout)
+	var lport uint16
+	var sentAt time.Time
+	registered := make(chan struct{})
+	d := net.Dialer{Timeout: e.timeout}
+	var ctlErr error
+	d.Control = func(network, address string, c syscall.RawConn) error {
+		// Set the TTL and bind first so we know our source port before the
+		// SYN leaves; hops quote that port in Time Exceeded.
+		return c.Control(func(fd uintptr) {
+			port, err := prepareTCPProbeSocket(fd, e.v6, ttl)
+			if err != nil {
+				ctlErr = err
+				return
+			}
+			lport = port
+			sentAt = time.Now()
+			e.pend.add(lport, pendingProbe{ttl: ttl, sentAt: sentAt, cancel: cancel})
+			close(registered)
+		})
+	}
+	go func() {
+		defer cancel()
+		conn, err := d.DialContext(ctx, tcpNetwork(e.v6), net.JoinHostPort(e.dst.String(), fmt.Sprint(e.port)))
+		if conn != nil {
+			conn.Close()
+		}
+		select {
+		case <-registered:
+		default:
+			return // control never ran or failed
+		}
+		// Completed handshake or an RST from the destination both mean it was reached.
+		if err == nil || isConnRefused(err) {
+			if pr, ok := e.pend.take(lport); ok {
+				e.replies <- mtrReply{ttl: pr.ttl, from: e.dst, rtt: time.Since(pr.sentAt), reached: true}
+			}
+		}
+	}()
+	// Give Control a moment to run so a socket-level failure surfaces as an error.
+	select {
+	case <-registered:
+		return nil
+	case <-time.After(200 * time.Millisecond):
+		if ctlErr != nil {
+			cancel()
+			return ctlErr
+		}
+		return nil
+	}
+}
+
+func tcpNetwork(v6 bool) string {
+	if v6 {
+		return "tcp6"
+	}
+	return "tcp4"
+}
+
+func isConnRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "connection refused") || strings.Contains(s, "connection reset")
+}
+
+// reader turns raw ICMP packets into replies for pending probes.
+func (e *mtrEngine) reader() {
+	buf := make([]byte, 1500)
+	proto := 1
+	if e.v6 {
+		proto = 58
+	}
+	for {
+		n, peer, err := e.icmpConn.ReadFrom(buf)
+		if err != nil {
+			return // socket closed
+		}
+		now := time.Now()
+		msg, err := icmp.ParseMessage(proto, buf[:n])
+		if err != nil {
+			continue
+		}
+		var (
+			key    uint16
+			ok     bool
+			isEcho bool
+		)
+		switch body := msg.Body.(type) {
+		case *icmp.Echo:
+			if e.mode != "icmp" {
+				continue
+			}
+			isReply := (!e.v6 && msg.Type == ipv4.ICMPTypeEchoReply) || (e.v6 && msg.Type == ipv6.ICMPTypeEchoReply)
+			if !isReply || uint16(body.ID) != e.id {
+				continue
+			}
+			key, ok, isEcho = uint16(body.Seq), true, true
+		case *icmp.TimeExceeded:
+			key, ok = innerKey(body.Data, e.v6, e.mode, e.id)
+		case *icmp.DstUnreach:
+			key, ok = innerKey(body.Data, e.v6, e.mode, e.id)
+		default:
+			continue
+		}
+		if !ok {
+			continue
+		}
+		pr, found := e.pend.take(key)
+		if !found {
+			continue
+		}
+		if pr.cancel != nil {
+			pr.cancel()
+		}
+		var from net.IP
+		switch a := peer.(type) {
+		case *net.IPAddr:
+			from = a.IP
+		case *net.UDPAddr:
+			from = a.IP
+		default:
+			continue
+		}
+		e.replies <- mtrReply{ttl: pr.ttl, from: from, rtt: now.Sub(pr.sentAt), reached: (isEcho || e.mode != "icmp") && from.Equal(e.dst)}
+	}
+}
+
+// innerKey extracts the probe key from the quoted original datagram inside a
+// Time Exceeded / Destination Unreachable message: the ICMP sequence for echo
+// probes, or the transport source port for udp/tcp probes.
+func innerKey(data []byte, v6 bool, mode string, id uint16) (uint16, bool) {
+	var (
+		proto     byte
+		transport []byte
+	)
+	if v6 {
+		if len(data) < 40+8 {
+			return 0, false
+		}
+		proto, transport = data[6], data[40:]
+	} else {
+		if len(data) < 20 {
+			return 0, false
+		}
+		hl := int(data[0]&0x0f) * 4
+		if hl < 20 || len(data) < hl+8 {
+			return 0, false
+		}
+		proto, transport = data[9], data[hl:]
+	}
+	switch mode {
+	case "icmp":
+		if (!v6 && proto != 1) || (v6 && proto != 58) {
+			return 0, false
+		}
+		if (!v6 && transport[0] != 8) || (v6 && transport[0] != 128) { // echo request
+			return 0, false
+		}
+		if binary.BigEndian.Uint16(transport[4:6]) != id {
+			return 0, false
+		}
+		return binary.BigEndian.Uint16(transport[6:8]), true
+	case "udp":
+		if proto != 17 {
+			return 0, false
+		}
+		return binary.BigEndian.Uint16(transport[0:2]), true
+	case "tcp":
+		if proto != 6 {
+			return 0, false
+		}
+		return binary.BigEndian.Uint16(transport[0:2]), true
+	}
+	return 0, false
+}
+
+// --- raw socket plumbing ----------------------------------------------------
 
 func listenRawICMP(v6 bool) (*icmp.PacketConn, error) {
 	if v6 {
@@ -330,97 +627,4 @@ func echoMessage(v6 bool, id, seq uint16, payload []byte) ([]byte, error) {
 	}
 	m := icmp.Message{Type: typ, Code: 0, Body: &icmp.Echo{ID: int(id), Seq: int(seq), Data: payload}}
 	return m.Marshal(nil)
-}
-
-func mtrReader(conn *icmp.PacketConn, v6 bool, id uint16, dst net.IP, pend *pendingMap, out chan<- mtrReply) {
-	buf := make([]byte, 1500)
-	proto := 1
-	if v6 {
-		proto = 58
-	}
-	for {
-		n, peer, err := conn.ReadFrom(buf)
-		if err != nil {
-			return // socket closed
-		}
-		now := time.Now()
-		msg, err := icmp.ParseMessage(proto, buf[:n])
-		if err != nil {
-			continue
-		}
-		var (
-			seq    uint16
-			ok     bool
-			isEcho bool
-		)
-		switch body := msg.Body.(type) {
-		case *icmp.Echo:
-			isReply := (!v6 && msg.Type == ipv4.ICMPTypeEchoReply) || (v6 && msg.Type == ipv6.ICMPTypeEchoReply)
-			if !isReply || uint16(body.ID) != id {
-				continue
-			}
-			seq, ok, isEcho = uint16(body.Seq), true, true
-		case *icmp.TimeExceeded:
-			seq, ok = innerSeq(body.Data, v6, id)
-		case *icmp.DstUnreach:
-			seq, ok = innerSeq(body.Data, v6, id)
-		default:
-			continue
-		}
-		if !ok {
-			continue
-		}
-		pr, found := pend.take(seq)
-		if !found {
-			continue
-		}
-		var from net.IP
-		switch a := peer.(type) {
-		case *net.IPAddr:
-			from = a.IP
-		case *net.UDPAddr:
-			from = a.IP
-		default:
-			continue
-		}
-		out <- mtrReply{ttl: pr.ttl, from: from, rtt: now.Sub(pr.sentAt), reached: isEcho && from.Equal(dst)}
-	}
-}
-
-// innerSeq extracts our echo ID/sequence from the quoted original datagram in
-// a Time Exceeded / Destination Unreachable message.
-func innerSeq(data []byte, v6 bool, id uint16) (uint16, bool) {
-	var inner []byte
-	if v6 {
-		if len(data) < 40+8 {
-			return 0, false
-		}
-		inner = data[40:]
-		if inner[0] != 128 { // ICMPv6 echo request
-			return 0, false
-		}
-	} else {
-		if len(data) < 20 {
-			return 0, false
-		}
-		hl := int(data[0]&0x0f) * 4
-		if hl < 20 || len(data) < hl+8 {
-			return 0, false
-		}
-		inner = data[hl:]
-		if inner[0] != 8 { // ICMP echo request
-			return 0, false
-		}
-	}
-	if binary.BigEndian.Uint16(inner[4:6]) != id {
-		return 0, false
-	}
-	return binary.BigEndian.Uint16(inner[6:8]), true
-}
-
-// sortedHosts is a small helper used by tests.
-func sortedHosts(h []string) []string {
-	out := append([]string(nil), h...)
-	sort.Strings(out)
-	return out
 }

@@ -138,3 +138,5 @@ details summary { cursor: pointer; color: var(--muted); }
 .snippet { position: relative; }
 .snippet .copy { position: absolute; top: 12px; right: 8px; }
 .snippet pre.cmd { padding-right: 70px; }
+
+textarea { width: 100%; min-width: 260px; font-family: var(--mono); font-size: 12.5px; resize: vertical; }

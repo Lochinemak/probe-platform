@@ -100,44 +100,60 @@ func TestResolveLiteral(t *testing.T) {
 	}
 }
 
-// TestInnerSeq builds a quoted IPv4 datagram like a router puts in a Time
-// Exceeded message and checks we pull the right ID/seq back out.
-func TestInnerSeq(t *testing.T) {
+// TestInnerKey builds quoted datagrams like a router puts in a Time Exceeded
+// message and checks we pull the right key back out for each probe flavour.
+func TestInnerKey(t *testing.T) {
 	const id, seq = 0xBEEF, 42
-	ipHdr := make([]byte, 20)
-	ipHdr[0] = 0x45 // IPv4, IHL 5
-	icmpHdr := make([]byte, 8)
-	icmpHdr[0] = 8 // echo request
-	binary.BigEndian.PutUint16(icmpHdr[4:], id)
-	binary.BigEndian.PutUint16(icmpHdr[6:], seq)
-	data := append(ipHdr, icmpHdr...)
+	ipHdr := func(ihl int, proto byte) []byte {
+		h := make([]byte, ihl*4)
+		h[0] = 0x40 | byte(ihl)
+		h[9] = proto
+		return h
+	}
+	icmpEcho := make([]byte, 8)
+	icmpEcho[0] = 8
+	binary.BigEndian.PutUint16(icmpEcho[4:], id)
+	binary.BigEndian.PutUint16(icmpEcho[6:], seq)
 
-	got, ok := innerSeq(data, false, id)
+	got, ok := innerKey(append(ipHdr(5, 1), icmpEcho...), false, "icmp", id)
 	if !ok || got != seq {
-		t.Fatalf("v4: got %d ok=%v", got, ok)
+		t.Fatalf("v4 icmp: got %d ok=%v", got, ok)
 	}
-	if _, ok := innerSeq(data, false, id+1); ok {
-		t.Fatal("v4: wrong id must not match")
+	if _, ok := innerKey(append(ipHdr(5, 1), icmpEcho...), false, "icmp", id+1); ok {
+		t.Fatal("wrong id must not match")
 	}
-	// IHL 6 (one option word) shifts the ICMP header by 4 bytes.
-	ipHdr6 := make([]byte, 24)
-	ipHdr6[0] = 0x46
-	got, ok = innerSeq(append(ipHdr6, icmpHdr...), false, id)
-	if !ok || got != seq {
+	if got, ok := innerKey(append(ipHdr(6, 1), icmpEcho...), false, "icmp", id); !ok || got != seq {
 		t.Fatalf("v4 ihl6: got %d ok=%v", got, ok)
 	}
 
-	// IPv6: fixed 40-byte header, echo request type 128.
-	ip6 := make([]byte, 40)
+	udp := make([]byte, 8)
+	binary.BigEndian.PutUint16(udp[0:], 41234) // src port
+	binary.BigEndian.PutUint16(udp[2:], 33434)
+	if got, ok := innerKey(append(ipHdr(5, 17), udp...), false, "udp", id); !ok || got != 41234 {
+		t.Fatalf("v4 udp: got %d ok=%v", got, ok)
+	}
+	if _, ok := innerKey(append(ipHdr(5, 17), udp...), false, "tcp", id); ok {
+		t.Fatal("udp quote must not match tcp mode")
+	}
+	tcp := make([]byte, 20)
+	binary.BigEndian.PutUint16(tcp[0:], 50000)
+	if got, ok := innerKey(append(ipHdr(5, 6), tcp...), false, "tcp", id); !ok || got != 50000 {
+		t.Fatalf("v4 tcp: got %d ok=%v", got, ok)
+	}
+
+	// IPv6: fixed 40-byte header, next header at byte 6.
+	ip6 := func(next byte) []byte { h := make([]byte, 40); h[6] = next; return h }
 	icmp6 := make([]byte, 8)
 	icmp6[0] = 128
 	binary.BigEndian.PutUint16(icmp6[4:], id)
 	binary.BigEndian.PutUint16(icmp6[6:], seq)
-	got, ok = innerSeq(append(ip6, icmp6...), true, id)
-	if !ok || got != seq {
-		t.Fatalf("v6: got %d ok=%v", got, ok)
+	if got, ok := innerKey(append(ip6(58), icmp6...), true, "icmp", id); !ok || got != seq {
+		t.Fatalf("v6 icmp: got %d ok=%v", got, ok)
 	}
-	if _, ok := innerSeq([]byte{1, 2, 3}, false, id); ok {
+	if got, ok := innerKey(append(ip6(6), tcp...), true, "tcp", id); !ok || got != 50000 {
+		t.Fatalf("v6 tcp: got %d ok=%v", got, ok)
+	}
+	if _, ok := innerKey([]byte{1, 2, 3}, false, "icmp", id); ok {
 		t.Fatal("short buffer must not match")
 	}
 }
@@ -258,5 +274,78 @@ func TestEffectiveEnd(t *testing.T) {
 	}
 	if got := effectiveEnd(hops, 6, 0); got != 6 {
 		t.Fatalf("capped at maxHops: %d", got)
+	}
+}
+
+func TestHTTPAssertionsAndSpeed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 4096)
+				_ = c.SetReadDeadline(time.Now().Add(time.Second))
+				n, _ := c.Read(buf)
+				req := string(buf[:n])
+				switch {
+				case strings.HasPrefix(req, "GET /redir"):
+					_, _ = c.Write([]byte("HTTP/1.1 302 Found\r\nLocation: /ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+				case strings.HasPrefix(req, "GET /big"):
+					_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n"))
+					chunk := make([]byte, 64<<10)
+					deadline := time.Now().Add(3 * time.Second)
+					for time.Now().Before(deadline) {
+						if _, err := c.Write(chunk); err != nil {
+							return
+						}
+					}
+				default:
+					_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world"))
+				}
+			}(c)
+		}
+	}()
+	base := "http://" + ln.Addr().String()
+
+	// Keyword + implicit status assertion pass; max-time assertion fails.
+	res, err := HTTP(context.Background(), base+"/ok", protocol.Params{ExpectKeyword: "world", ExpectMaxMs: 0}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := res.Attempts[0]
+	if !a.OK || !a.AssertOK || len(a.Assertions) != 2 || !a.Assertions[1].Pass {
+		t.Fatalf("keyword: %+v", a.Assertions)
+	}
+	res, _ = HTTP(context.Background(), base+"/ok", protocol.Params{ExpectKeyword: "nope", ExpectStatus: 201}, nil)
+	a = res.Attempts[0]
+	if a.AssertOK || a.Assertions[0].Pass || a.Assertions[1].Pass {
+		t.Fatalf("failing assertions: %+v", a.Assertions)
+	}
+	if res.Stats.Received != 0 {
+		t.Fatal("assertion failures must not count as successes")
+	}
+
+	// Redirect chain records the status of each hop.
+	res, _ = HTTP(context.Background(), base+"/redir", protocol.Params{FollowRedirects: true}, nil)
+	a = res.Attempts[0]
+	if !a.OK || a.StatusCode != 200 || len(a.Redirects) != 1 || !strings.HasPrefix(a.Redirects[0], "302 ") {
+		t.Fatalf("redirects: %+v status=%d", a.Redirects, a.StatusCode)
+	}
+
+	// Speed test reads for the window and reports throughput.
+	res, _ = HTTP(context.Background(), base+"/big", protocol.Params{SpeedTest: true, SpeedSeconds: 1}, nil)
+	a = res.Attempts[0]
+	// On loopback the byte cap is reached long before the 1 s window; on a
+	// real link the window ends first. Either way we must have a rate.
+	if !a.OK || a.SpeedBytes < 64<<10 || a.ThroughputMbps <= 0 || (a.SpeedMs < 900 && a.SpeedBytes < maxSpeedRead) {
+		t.Fatalf("speed: bytes=%d mbps=%v ms=%v err=%s", a.SpeedBytes, a.ThroughputMbps, a.SpeedMs, a.Error)
 	}
 }

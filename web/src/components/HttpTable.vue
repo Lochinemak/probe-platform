@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { ms, bytes, statusLabel, agentPlace, fmtTime } from '../fmt.js'
+import { ms, bytes, mbps, statusLabel, agentPlace, fmtTime } from '../fmt.js'
 import ErrorBadge from './ErrorBadge.vue'
 
 defineProps({ task: Object, results: Array })
@@ -33,6 +33,7 @@ function phaseWidths(t) {
           <th class="num">下载</th>
           <th class="num">总耗时</th>
           <th class="num">大小</th>
+          <th class="num" v-if="task.params?.speed_test">速率</th>
           <th>耗时分布</th>
           <th>状态</th>
         </tr>
@@ -56,6 +57,7 @@ function phaseWidths(t) {
             <td class="num">{{ r.avg?.total_ms !== undefined ? ms(r.avg.transfer_ms) : '-' }}</td>
             <td class="num"><b>{{ r.avg?.total_ms !== undefined ? ms(r.avg.total_ms) : '-' }}</b></td>
             <td class="num">{{ r.last?.ok ? bytes(r.last.body_bytes) : '-' }}</td>
+            <td class="num" v-if="task.params?.speed_test"><b>{{ r.throughput ? mbps(r.throughput) : '-' }}</b></td>
             <td>
               <div class="phases" v-if="r.avg?.total_ms !== undefined" style="width:160px">
                 <i v-for="p in phaseWidths(r.avg)" :key="p.k" :class="p.k" :style="{ width: p.w + '%' }" :title="p.k + ' ' + ms(p.v) + 'ms'"></i>
@@ -64,16 +66,19 @@ function phaseWidths(t) {
             <td>
               <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
               <ErrorBadge v-else-if="r.status === 'error' || (r.last && !r.last.ok)" :message="r.error || r.last?.error || '失败'" />
+              <ErrorBadge v-else-if="r.assertFail" :message="'断言未通过：\n' + r.failedAssertions.join('\n')" />
               <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
             </td>
           </tr>
           <tr v-if="open[r.agent_id]">
-            <td colspan="15" style="white-space:normal">
+            <td colspan="16" style="white-space:normal">
               <div class="detail" v-for="a in r.attempts" :key="a.seq">
                 <div class="row" style="margin-bottom:6px">
                   <span class="badge">#{{ a.seq + 1 }}</span>
                   <span v-if="a.status_code" class="badge" :class="codeClass(a.status_code)">{{ a.status }}</span>
                   <span v-if="!a.ok" class="bad">{{ a.error }}</span>
+                  <span v-for="(as, i) in a.assertions || []" :key="i" class="badge" :class="as.pass ? 'ok' : 'bad'" :title="as.detail">{{ as.pass ? '✓' : '✗' }} {{ as.name }}</span>
+                  <span v-if="a.throughput_mbps" class="badge ok">{{ mbps(a.throughput_mbps) }} · {{ bytes(a.speed_bytes) }} / {{ ms(a.speed_ms) }} ms</span>
                   <span class="mono sub">{{ a.final_url && a.final_url !== a.url ? a.url + ' → ' + a.final_url : a.url }}</span>
                 </div>
                 <div class="phases" v-if="a.ok">
@@ -95,7 +100,10 @@ function phaseWidths(t) {
                     <div>证书</div><div>{{ a.cert_subject }} <span class="sub">由 {{ a.cert_issuer }} 签发，{{ fmtTime(a.cert_not_after) }} 到期</span></div>
                   </template>
                   <template v-if="a.redirects?.length">
-                    <div>重定向</div><div class="mono">{{ a.redirects.join(' → ') }}</div>
+                    <div>跳转链</div><div class="mono">{{ a.url }}<template v-for="(h, i) in a.redirects" :key="i"> <span class="sub">→ {{ h.split(' ')[0] }} →</span> {{ h.split(' ').slice(1).join(' ') }}</template></div>
+                  </template>
+                  <template v-for="(as, i) in a.assertions || []" :key="'as' + i">
+                    <div>断言 · {{ as.name }}</div><div :class="as.pass ? 'ok' : 'bad'">{{ as.pass ? '通过' : '未通过' }} <span class="sub">{{ as.detail }}</span></div>
                   </template>
                   <div>大小</div><div>{{ bytes(a.body_bytes) }} <span class="sub" v-if="a.content_length >= 0">(Content-Length {{ a.content_length }})</span></div>
                   <template v-for="k in ['Server', 'Content-Type', 'Cache-Control', 'X-Cache', 'Via', 'Cf-Ray', 'X-Powered-By', 'Location']" :key="k">
