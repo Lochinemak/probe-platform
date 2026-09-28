@@ -1,0 +1,14 @@
+# build outputs
+/bin/
+/dist/
+/web/dist/
+/web/node_modules/
+# runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+agent_token
+# misc
+.DS_Store
+*.log

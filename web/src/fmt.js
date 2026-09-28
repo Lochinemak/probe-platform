@@ -1,0 +1,62 @@
+export function ms(v) {
+  if (v === undefined || v === null || Number.isNaN(v)) return '-'
+  if (v === 0) return '0'
+  if (v < 1) return v.toFixed(2)
+  if (v < 10) return v.toFixed(2)
+  if (v < 100) return v.toFixed(1)
+  return Math.round(v).toString()
+}
+
+export function pct(v) {
+  if (v === undefined || v === null) return '-'
+  return (Math.round(v * 10) / 10) + '%'
+}
+
+export function lossClass(v) {
+  if (v === undefined || v === null) return ''
+  if (v <= 0) return 'ok'
+  if (v < 20) return 'warn'
+  return 'bad'
+}
+
+export function rttClass(v) {
+  if (v === undefined || v === null) return ''
+  if (v < 50) return 'ok'
+  if (v < 150) return 'warn'
+  return 'bad'
+}
+
+export function bytes(n) {
+  if (n === undefined || n === null || n < 0) return '-'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(2) + ' MB'
+}
+
+export function fmtTime(iso) {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '-'
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+export function timeAgo(iso) {
+  if (!iso) return '-'
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000
+  if (diff < 5) return '刚刚'
+  if (diff < 60) return `${Math.floor(diff)} 秒前`
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  return `${Math.floor(diff / 86400)} 天前`
+}
+
+export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR' }
+
+export function statusLabel(s) {
+  return { pending: '等待', running: '进行中', done: '完成', error: '失败' }[s] || s
+}
+
+export function agentPlace(r) {
+  return [r.location || r.geo_location, r.isp || r.geo_isp].filter(Boolean).join(' · ')
+}

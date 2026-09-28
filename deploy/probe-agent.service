@@ -1,0 +1,21 @@
+[Unit]
+Description=probe-platform agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/probe-agent.env
+ExecStart=/usr/local/bin/probe-agent
+Restart=always
+RestartSec=5
+# Run unprivileged but keep raw-socket capability for ICMP ping / MTR.
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

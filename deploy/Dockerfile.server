@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+# --- frontend ---
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json* ./
+RUN npm install --no-fund --no-audit
+COPY web/ ./
+RUN npm run build
+
+# --- backend ---
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG VERSION=dev
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=web /src/web/dist ./web/dist
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X probe-platform/internal/buildinfo.Version=$VERSION" -o /out/probe-server ./cmd/server
+
+# --- runtime ---
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 probe
+COPY --from=build /out/probe-server /usr/local/bin/probe-server
+USER probe
+VOLUME ["/data"]
+ENV PROBE_LISTEN=:8080 PROBE_DATA_DIR=/data
+EXPOSE 8080
+ENTRYPOINT ["probe-server"]

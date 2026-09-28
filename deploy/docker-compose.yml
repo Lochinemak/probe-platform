@@ -1,0 +1,39 @@
+# Server + a local agent on the same host (e.g. your Tencent Cloud VM).
+# 1) cp deploy/.env.example deploy/.env && edit
+# 2) docker compose -f deploy/docker-compose.yml up -d
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    image: probe-platform/probe-server:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PROBE_AGENT_TOKEN: ${PROBE_AGENT_TOKEN:?set PROBE_AGENT_TOKEN in deploy/.env}
+      PROBE_ADMIN_PASSWORD: ${PROBE_ADMIN_PASSWORD:-}
+      PROBE_TRUST_PROXY: ${PROBE_TRUST_PROXY:-false}
+      PROBE_GEOIP_ONLINE: ${PROBE_GEOIP_ONLINE:-true}
+      PROBE_RETAIN_DAYS: ${PROBE_RETAIN_DAYS:-90}
+    volumes:
+      - probe-data:/data
+
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    image: probe-platform/probe-agent:latest
+    restart: unless-stopped
+    network_mode: host          # measure from the host's real network stack
+    cap_add: [NET_RAW]          # raw ICMP for ping + mtr
+    environment:
+      PROBE_SERVER: http://127.0.0.1:8080
+      PROBE_TOKEN: ${PROBE_AGENT_TOKEN}
+      PROBE_NAME: ${LOCAL_AGENT_NAME:-server-local}
+      PROBE_LOCATION: ${LOCAL_AGENT_LOCATION:-}
+      PROBE_ISP: ${LOCAL_AGENT_ISP:-}
+    depends_on: [server]
+
+volumes:
+  probe-data:

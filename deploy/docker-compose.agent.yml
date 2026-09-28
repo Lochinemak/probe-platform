@@ -1,0 +1,17 @@
+# Standalone agent for a NAS / home server. Works on x86_64, arm64 and armv7.
+#   PROBE_SERVER=https://probe.example.com PROBE_TOKEN=... PROBE_NAME=home-sz \
+#   docker compose -f docker-compose.agent.yml up -d
+services:
+  agent:
+    image: ghcr.io/CHANGE_ME/probe-agent:latest   # or build from deploy/Dockerfile.agent
+    container_name: probe-agent
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [NET_RAW]
+    environment:
+      PROBE_SERVER: ${PROBE_SERVER:?}
+      PROBE_TOKEN: ${PROBE_TOKEN:?}
+      PROBE_NAME: ${PROBE_NAME:?}
+      PROBE_LOCATION: ${PROBE_LOCATION:-}
+      PROBE_ISP: ${PROBE_ISP:-}
+      PROBE_TAGS: ${PROBE_TAGS:-}

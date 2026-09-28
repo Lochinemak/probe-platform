@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "probe-server",
+      "runtimeExecutable": "./bin/probe-server",
+      "runtimeArgs": ["--listen", ":8080", "--data", "./data"],
+      "port": 8080
+    }
+  ]
+}

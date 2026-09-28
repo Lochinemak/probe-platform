@@ -1,0 +1,60 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - run: make web
+      - run: make agents-all VERSION=${GITHUB_REF_NAME}
+      - run: cd bin && sha256sum * > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: bin/*
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/probe-agent:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/probe-agent:latest
+      - name: server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/probe-server:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/probe-server:latest
