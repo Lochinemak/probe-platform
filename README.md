@@ -107,6 +107,13 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 
 之后 MTR 每一跳会显示「中国 广东省 深圳市 电信」这类标签。agent 自身的公网 IP 默认通过 ip-api.com 在线识别（可用 `PROBE_GEOIP_ONLINE=false` 关闭）。
 
+## 生产部署与 CI/CD（当前实例）
+
+- **Dashboard**：`https://probe.geneyuriy.com`，腾讯云主机上以 Docker 运行（`/opt/probe-platform`，文件见 `deploy/prod/`），OpenResty 在宿主机做 TLS 终止与反代，证书由 acme.sh 签发并通过 `--install-cert ... --reloadcmd "systemctl reload openresty"` 自动续期。
+- **持续部署**：推送到 `main` → GitHub Actions 构建并推送 `ghcr.io/lochinemak/probe-server` 与 `probe-agent` 镜像 → 通过一把只允许执行 `deploy.sh` 的受限 SSH 密钥通知主机 → 主机经镜像站 `ghcr.91856478.xyz` 拉取该 commit 的 `sha-xxxxxxx` 标签并重启。回滚：在主机上执行 `/opt/probe-platform/deploy.sh sha-<旧commit>`。
+- **发布**：打 `v*` 标签会额外产出各架构的二进制到 GitHub Releases。
+- 需要的仓库 secrets：`DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`。
+
 ## 配置
 
 server（flag 或环境变量）：
