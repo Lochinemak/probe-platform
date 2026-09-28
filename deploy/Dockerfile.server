@@ -17,7 +17,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN set -e; mkdir -p /out/agents; \
-    for t in linux/amd64 linux/arm64 linux/arm/7 linux/arm/6 linux/386 linux/mipsle linux/mips linux/mips64le linux/riscv64 darwin/arm64 darwin/amd64 windows/amd64 freebsd/amd64; do \
+    for t in linux/amd64 linux/arm64 linux/arm/7 linux/arm/6 linux/386 linux/mipsle linux/mips linux/mips64le linux/riscv64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 windows/386 freebsd/amd64; do \
       os=${t%%/*}; rest=${t#*/}; arch=${rest%%/*}; arm=""; variant=""; \
       case "$rest" in */*) arm=${rest#*/}; variant="v$arm";; esac; \
       ext=""; [ "$os" = windows ] && ext=".exe"; \
@@ -25,7 +25,7 @@ RUN set -e; mkdir -p /out/agents; \
         -ldflags "-s -w -X probe-platform/internal/buildinfo.Version=$VERSION -X probe-platform/internal/buildinfo.Variant=$variant" \
         -o /out/agents/probe-agent-$os-$arch$variant$ext ./cmd/agent; \
     done; \
-    cp deploy/install-agent.sh deploy/install-agent-openwrt.sh /out/agents/; \
+    cp deploy/install-agent.sh deploy/install-agent-openwrt.sh deploy/uninstall-agent.sh deploy/install-agent.ps1 /out/agents/; \
     cd /out/agents && sha256sum probe-agent-* > SHA256SUMS
 
 # --- server ---

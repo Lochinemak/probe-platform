@@ -25,7 +25,7 @@ build: web server agent
 ## agents-all: cross-compile agents for every NAS / server architecture
 agents-all:
 	@mkdir -p $(BIN)
-	@for t in linux/amd64 linux/arm64 linux/arm/7 linux/arm/6 linux/386 linux/mipsle linux/mips linux/mips64le linux/riscv64 darwin/arm64 darwin/amd64 windows/amd64 freebsd/amd64; do \
+	@for t in linux/amd64 linux/arm64 linux/arm/7 linux/arm/6 linux/386 linux/mipsle linux/mips linux/mips64le linux/riscv64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64 windows/386 freebsd/amd64; do \
 		os=$${t%%/*}; rest=$${t#*/}; arch=$${rest%%/*}; arm=""; suffix=""; \
 		case $$rest in */*) arm=$${rest#*/}; suffix=v$$arm;; esac; \
 		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \

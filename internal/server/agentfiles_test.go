@@ -29,6 +29,7 @@ func TestAgentFiles(t *testing.T) {
 	writeFile(t, dir, "probe-agent-windows-amd64.exe", "c")
 	writeFile(t, dir, "SHA256SUMS", "ignored")
 	writeFile(t, dir, "install-agent.sh", "#!/bin/sh")
+	writeFile(t, dir, "uninstall-agent.sh", "#!/bin/sh")
 
 	f := NewAgentFiles(dir, discardLogger())
 	if f == nil {
@@ -74,6 +75,8 @@ func TestAgentDownloadAPI(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "probe-agent-linux-amd64", "binary-bytes")
 	writeFile(t, dir, "install-agent.sh", "#!/bin/sh\necho hi\n")
+	writeFile(t, dir, "uninstall-agent.sh", "#!/bin/sh\necho bye\n")
+	writeFile(t, dir, "install-agent.ps1", "Write-Host hi\n")
 	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, AgentsDir: dir}
 	files := NewAgentFiles(dir, discardLogger())
 	hub := NewHub(cfg, st, nil, files, discardLogger())
@@ -138,5 +141,15 @@ func TestAgentDownloadAPI(t *testing.T) {
 	b, _ = io.ReadAll(r.Body)
 	if r.StatusCode != 200 || string(b) != "#!/bin/sh\necho hi\n" {
 		t.Fatalf("install script: %d %q", r.StatusCode, b)
+	}
+	r = get("/uninstall-agent.sh", "")
+	b, _ = io.ReadAll(r.Body)
+	if r.StatusCode != 200 || string(b) != "#!/bin/sh\necho bye\n" {
+		t.Fatalf("uninstall script: %d %q", r.StatusCode, b)
+	}
+	r = get("/install-agent.ps1", "")
+	b, _ = io.ReadAll(r.Body)
+	if r.StatusCode != 200 || string(b) != "Write-Host hi\n" || r.Header.Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("windows install script: %d %q %q", r.StatusCode, b, r.Header.Get("Content-Type"))
 	}
 }

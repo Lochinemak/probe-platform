@@ -80,6 +80,8 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
 	mux.HandleFunc("GET /install-agent.sh", a.installScript)
 	mux.HandleFunc("GET /install-agent-openwrt.sh", a.installScript)
+	mux.HandleFunc("GET /uninstall-agent.sh", a.installScript)
+	mux.HandleFunc("GET /install-agent.ps1", a.installScript)
 	mux.Handle("/", a.spaHandler())
 	return a.recoverer(mux)
 }
@@ -235,20 +237,28 @@ func (a *API) agentDownload(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, af.Name, af.modTime, fh)
 }
 
-// installScript serves deploy/install-agent.sh from the agents dir so a new
-// node can be onboarded with `curl .../install-agent.sh | sudo sh`.
+// installScript serves the deploy/*-agent* helper scripts from the agents
+// dir so a node can be onboarded with `curl .../install-agent.sh | sudo sh`
+// (Windows: `irm .../install-agent.ps1 | iex`) and removed again with
+// `curl .../uninstall-agent.sh | sudo sh`.
 func (a *API) installScript(w http.ResponseWriter, r *http.Request) {
 	if a.files == nil {
 		http.Error(w, "not available", http.StatusNotFound)
 		return
 	}
-	name := path.Base(r.URL.Path) // install-agent.sh or install-agent-openwrt.sh, fixed by the mux patterns
+	name := path.Base(r.URL.Path) // install-agent.sh, install-agent-openwrt.sh, uninstall-agent.sh or install-agent.ps1, fixed by the mux patterns
 	b, err := os.ReadFile(filepath.Join(a.files.Dir(), name))
 	if err != nil {
 		http.Error(w, "not available", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	ct := "text/x-shellscript; charset=utf-8"
+	if strings.HasSuffix(name, ".ps1") {
+		// PowerShell's Invoke-RestMethod decodes by the declared charset and
+		// assumes ISO-8859-1 without one.
+		ct = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", ct)
 	_, _ = w.Write(b)
 }
 
