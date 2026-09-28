@@ -67,6 +67,15 @@ docker run -d --name probe-agent --restart unless-stopped \
 
 **二进制 + systemd（Linux）**
 
+一条命令（脚本会安装二进制、写 `/etc/probe-agent.env`、装 unit 并启动；重复执行即升级）：
+
+```bash
+scp bin/probe-agent-linux-amd64 deploy/install-agent.sh user@nas:/tmp/
+ssh user@nas "sudo sh -c 'PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<token> PROBE_NAME=home-sz PROBE_LOCATION=\"广东 深圳\" PROBE_ISP=电信 sh /tmp/install-agent.sh /tmp/probe-agent-linux-amd64'"
+```
+
+或者手动：
+
 ```bash
 sudo install -m755 bin/probe-agent-linux-arm64 /usr/local/bin/probe-agent
 sudo setcap cap_net_raw+ep /usr/local/bin/probe-agent
