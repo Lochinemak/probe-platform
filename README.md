@@ -60,9 +60,24 @@ curl -fsSL https://probe.example.com/install-agent.sh | sudo \
   PROBE_NAME=home-shenzhen PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
 ```
 
-脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。重复执行即升级或改配置。
+脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mipsle / mips / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。重复执行即升级或改配置。
 
-**Docker**（群晖 / QNAP / Unraid / 任意有 Docker 的机器）：
+**OpenWrt / iStoreOS 路由器**（procd，无 systemd，以 root 运行）：
+
+```bash
+curl -fsSL https://probe.example.com/install-agent-openwrt.sh | \
+  PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<token> \
+  PROBE_NAME=home-router PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
+```
+
+- 占用约 8 MB overlay 空间、10 MB 内存；128 MB 闪存 / 512 MB 内存的机器绰绰有余，16 MB 闪存的老路由不建议。
+- 架构按 `uname -m` 自动选择：`aarch64`（MT7981 / MT7986 Filogic、RK3568 等）用 arm64；`mips`（MT7621 等）用 32 位 MIPS 软浮点构建，脚本会从 `/bin/sh` 的 ELF 头判断大小端。x86 软路由用 amd64。
+- 装好后 `logread -e probe-agent` 看日志，`/etc/init.d/probe-agent restart` 重启，配置在 `/etc/probe-agent.env`。自更新同样有效。
+- 如果这台路由器自己就在跑 OpenClash，它本机的 DNS 也是 fake-IP，域名类探测会失真；这种情况下把节点装在路由器后面的机器上更合适，或者用旁路由 / 二级 AP 上的 iStoreOS 做节点。
+
+**群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
+
+**Docker**（Unraid / 任意有 Docker 的机器）：
 
 ```bash
 docker run -d --name probe-agent --restart unless-stopped \
@@ -199,4 +214,4 @@ deploy/                    Dockerfile、compose、systemd、安装脚本、反�
 
 - Dashboard 能让任意在线节点向任意目标发包，**公网部署必须设置 `PROBE_ADMIN_PASSWORD` 并使用 HTTPS**。
 - agent 只接受 server 下发的四种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB）。
-- token 泄露后重新生成：删除 `data/agent_token` 或改 `PROBE_AGENT_TOKEN`，然后更新各 agent。
+- **所有 agent 目前共用一个 token**（`PROBE_AGENT_TOKEN`）。它只能让持有者以任意名字注册成节点、接收任务、下载 agent 二进制，不能登录 Dashboard 或查看历史。泄露后轮换：改 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）并重启 server，然后逐台改 `/etc/probe-agent.env`（或容器环境变量）再重启 agent；自更新机制不负责分发 token。若节点分散在多个不完全信任的地方，可以考虑改为每节点独立 token 并在 Dashboard 上签发 / 吊销，目前尚未实现。

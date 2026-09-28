@@ -52,6 +52,7 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logg
 	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
 	mux.HandleFunc("GET /install-agent.sh", a.installScript)
+	mux.HandleFunc("GET /install-agent-openwrt.sh", a.installScript)
 	mux.Handle("/", a.spaHandler())
 	return a.recoverer(mux)
 }
@@ -146,12 +147,13 @@ func (a *API) agentDownload(w http.ResponseWriter, r *http.Request) {
 
 // installScript serves deploy/install-agent.sh from the agents dir so a new
 // node can be onboarded with `curl .../install-agent.sh | sudo sh`.
-func (a *API) installScript(w http.ResponseWriter, _ *http.Request) {
+func (a *API) installScript(w http.ResponseWriter, r *http.Request) {
 	if a.files == nil {
 		http.Error(w, "not available", http.StatusNotFound)
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(a.files.Dir(), "install-agent.sh"))
+	name := path.Base(r.URL.Path) // install-agent.sh or install-agent-openwrt.sh, fixed by the mux patterns
+	b, err := os.ReadFile(filepath.Join(a.files.Dir(), name))
 	if err != nil {
 		http.Error(w, "not available", http.StatusNotFound)
 		return

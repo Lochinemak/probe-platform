@@ -1,0 +1,45 @@
+# 群晖 DSM 7.2+ · Container Manager → 项目 → 新增 → 粘贴此文件（来源选「创建 docker-compose.yml」）
+# DSM 6 / 旧版 Docker 套件：ssh 登录后 `sudo docker compose -f 本文件 up -d`
+#
+# 关键参数说明：
+#   network_mode: host   探测必须走 NAS 的真实网络栈；桥接网络会多一层 NAT，且 IPv6 / MTR 结果失真。
+#                        群晖 GUI 里等价于「使用与 Docker Host 相同的网络」。
+#   cap_add: NET_RAW     ICMP ping / MTR 需要 raw socket。不要用 GUI 的「高权限」(privileged)，权限过大。
+#   PROBE_SELF_UPDATE    镜像里默认关闭（容器靠拉新镜像升级），无需设置。
+#   镜像地址             ghcr.91856478.xyz 是 ghcr.io 的镜像站，大陆可直接拉；源站 ghcr.io/lochinemak/probe-agent。
+#   架构                 镜像含 amd64 / arm64 / armv7；群晖 ARM 机型只有部分（如 RTD1296、RTD1619B 的 arm64 机型）提供 Container Manager，
+#                        没有 Docker 的机型请用「计划任务 → 开机 → root 运行」方式跑二进制（见 README）。
+version: "3.8"
+services:
+  probe-agent:
+    image: ghcr.91856478.xyz/lochinemak/probe-agent:latest
+    container_name: probe-agent
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    environment:
+      PROBE_SERVER: https://probe.geneyuriy.com
+      PROBE_TOKEN: "<agent token>"
+      PROBE_NAME: nas-home-sz            # 节点唯一名，改成你的
+      PROBE_LOCATION: "广东 深圳"
+      PROBE_ISP: 电信
+      TZ: Asia/Shanghai
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # 可选：自动拉取新镜像并重启 agent（每小时检查一次，只管带 label 的容器）。
+  # containrrr/watchtower 在 Docker Hub，大陆拉取需要 Docker Hub 镜像站；不需要就删掉这一段。
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: probe-watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: --interval 3600 --cleanup --label-enable
+  #   environment:
+  #     TZ: Asia/Shanghai
+  # 并给 probe-agent 加上：
+  #   labels:
+  #     com.centurylinklabs.watchtower.enable: "true"

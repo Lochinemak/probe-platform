@@ -39,6 +39,8 @@ if [ -z "$BIN_SRC" ]; then
     i?86)           key=linux-386 ;;
     riscv64)        key=linux-riscv64 ;;
     mips64el)       key=linux-mips64le ;;
+    mips|mipsel)    # 32-bit MIPS: pick endianness from the ELF header of /bin/sh
+                    if [ "$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 01 ]; then key=linux-mipsle; else key=linux-mips; fi ;;
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
   esac
   command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }

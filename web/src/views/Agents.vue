@@ -78,7 +78,14 @@ onBeforeUnmount(() => clearInterval(timer))
         </p>
       </details>
       <details>
-        <summary>Docker（群晖 / QNAP / Unraid 均可，升级靠拉新镜像）</summary>
+        <summary>OpenWrt / iStoreOS 路由器（procd）</summary>
+        <pre class="cmd">curl -fsSL {{ serverURL }}/install-agent-openwrt.sh | \
+  PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; \
+  PROBE_NAME=home-router PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh</pre>
+        <p class="sub">arm64（MT7981 / MT7986）与 32 位 MIPS（MT7621）均支持；日志 <code>logread -e probe-agent</code>。</p>
+      </details>
+      <details>
+        <summary>Docker（群晖 / QNAP / Unraid 均可，升级靠拉新镜像；样例见仓库 deploy/nas/）</summary>
         <pre class="cmd">docker run -d --name probe-agent --restart unless-stopped \
   --network host --cap-add NET_RAW \
   -e PROBE_SERVER={{ serverURL }} \

@@ -1,0 +1,41 @@
+# 威联通 QTS / QuTS hero · Container Station 3 → 应用程序 → 创建 → 粘贴此 YAML
+# Container Station 2.x 用的是 docker-compose v1，需要保留 version 字段（本文件已带）。
+#
+# 关键参数说明：
+#   network_mode: host   探测走 NAS 真实网络栈。Container Station 里如果被默认虚拟交换机改成桥接，结果会失真，
+#                        创建时确认网络为 host。
+#   cap_add: NET_RAW     ICMP ping / MTR 需要 raw socket，比勾选「特权模式」安全。
+#   镜像地址             ghcr.91856478.xyz 为 ghcr.io 镜像站（大陆可直连），源站 ghcr.io/lochinemak/probe-agent；
+#                        也可以在 Container Station → 属性 → 镜像仓库 里把该镜像站加进去。
+#   架构                 x86 机型用 amd64；ARM 机型（TS-x33、TS-x31 系列）多为 arm64 / armv7，镜像均已提供。
+#   升级                 容器不自更新，重新拉取镜像后「重新创建」即可；或启用下面的 Watchtower。
+version: "3.8"
+services:
+  probe-agent:
+    image: ghcr.91856478.xyz/lochinemak/probe-agent:latest
+    container_name: probe-agent
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    environment:
+      PROBE_SERVER: https://probe.geneyuriy.com
+      PROBE_TOKEN: "<agent token>"
+      PROBE_NAME: qnap-home-gz            # 节点唯一名，改成你的
+      PROBE_LOCATION: "广东 广州"
+      PROBE_ISP: 移动
+      TZ: Asia/Shanghai
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # 可选：自动拉新镜像（需要能访问 Docker Hub 或其镜像站）
+  # watchtower:
+  #   image: containrrr/watchtower
+  #   container_name: probe-watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: --interval 3600 --cleanup probe-agent
+  #   environment:
+  #     TZ: Asia/Shanghai
