@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,20 +59,21 @@ func TestAgentIDFromName(t *testing.T) {
 }
 
 func TestSessionAuth(t *testing.T) {
-	a := newSessionAuth("secret")
-	tok, _ := a.issue()
-	if !a.valid(tok) {
-		t.Fatal("fresh token must validate")
+	a := newSessionAuth(Config{AdminPassword: "secret", AdminUser: "root", GuestAccess: true})
+	tok, _ := a.issue(Session{Role: roleAdmin, Name: "root", Via: "password"})
+	sess, ok := a.parse(tok)
+	if !ok || sess.Role != roleAdmin || sess.Name != "root" {
+		t.Fatalf("fresh token must validate: %+v %v", sess, ok)
 	}
-	if a.valid(tok+"x") || a.valid("1.2") || a.valid("") {
-		t.Fatal("tampered tokens must fail")
+	if _, ok := a.parse(tok + "x"); ok {
+		t.Fatal("tampered token must fail")
 	}
-	other := newSessionAuth("different")
-	if other.valid(tok) {
+	other := newSessionAuth(Config{AdminPassword: "different"})
+	if _, ok := other.parse(tok); ok {
 		t.Fatal("token from another password must fail")
 	}
-	if !a.checkPassword("secret") || a.checkPassword("nope") {
-		t.Fatal("password check")
+	if !a.checkPassword("root", "secret") || a.checkPassword("admin", "secret") || a.checkPassword("root", "nope") {
+		t.Fatal("password check must require the configured username and password")
 	}
 	for i := 0; i < 10; i++ {
 		if !a.allowAttempt("1.2.3.4") {
@@ -84,9 +86,22 @@ func TestSessionAuth(t *testing.T) {
 	if !a.allowAttempt("5.6.7.8") {
 		t.Fatal("other ip unaffected")
 	}
-	disabled := newSessionAuth("")
-	if !disabled.authenticated(httptest.NewRequest("GET", "/", nil)) {
-		t.Fatal("no password means open access")
+	anon := httptest.NewRequest("GET", "/", nil)
+	if a.role(anon) != roleGuest {
+		t.Fatal("anonymous visitor is a guest when guest access is on")
+	}
+	strict := newSessionAuth(Config{AdminPassword: "secret", GuestAccess: false})
+	if strict.role(anon) != "" {
+		t.Fatal("guest access off means anonymous must log in")
+	}
+	open := newSessionAuth(Config{})
+	if open.role(anon) != roleAdmin {
+		t.Fatal("no admin login configured means open mode")
+	}
+	withCookie := httptest.NewRequest("GET", "/", nil)
+	withCookie.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	if a.role(withCookie) != roleAdmin {
+		t.Fatal("valid cookie must be admin")
 	}
 }
 
@@ -160,15 +175,21 @@ func TestAPIAuthGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := Config{AdminPassword: "pw", AgentToken: "tok", TaskTimeout: time.Minute}
+	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, GuestAccess: true}
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
 	h := NewHandler(cfg, hub, st, emptyFS{}, nil, nil, discardLogger())
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
+	// Guests may list agents (trimmed) but not touch admin endpoints.
 	resp, _ := http.Get(srv.URL + "/api/agents")
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("guest agents: %d", resp.StatusCode)
+	}
+	for _, p := range []string{"/api/monitors", "/api/notify", "/api/agent/token", "/api/alerts"} {
+		if resp, _ := http.Get(srv.URL + p); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("guest must not access %s: %d", p, resp.StatusCode)
+		}
 	}
 	resp, _ = http.Get(srv.URL + "/ws/agent")
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -177,7 +198,33 @@ func TestAPIAuthGate(t *testing.T) {
 	resp, _ = http.Get(srv.URL + "/api/session")
 	var sess map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&sess)
-	if sess["auth_required"] != true || sess["authenticated"] != false {
+	if sess["auth_required"] != true || sess["authenticated"] != false || sess["role"] != "guest" {
 		t.Fatalf("session: %v", sess)
+	}
+	// Wrong username is rejected even with the right password.
+	resp, _ = http.Post(srv.URL+"/api/login", "application/json", strings.NewReader(`{"username":"root","password":"pw"}`))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong user: %d", resp.StatusCode)
+	}
+
+	// Guest access off: everything needs a login.
+	strictCfg := cfg
+	strictCfg.GuestAccess = false
+	strictSrv := httptest.NewServer(NewHandler(strictCfg, hub, st, emptyFS{}, nil, nil, discardLogger()))
+	defer strictSrv.Close()
+	if resp, _ := http.Get(strictSrv.URL + "/api/agents"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("strict guest agents: %d", resp.StatusCode)
+	}
+}
+
+func TestPublicAgentTrimsDetails(t *testing.T) {
+	ag := &protocol.AgentStatus{ID: "a", Name: "home", Online: true, PublicIP: "1.2.3.4", OS: "linux", Arch: "amd64", Version: "v1", GeoLocation: "中国 广东", GeoISP: "电信", Capabilities: []string{"mtr"}}
+	p := publicAgent(ag)
+	if p.PublicIP != "" || p.OS != "" || p.Version != "" || p.Location != "中国 广东" || p.ISP != "电信" || len(p.Capabilities) != 1 {
+		t.Fatalf("trimmed: %+v", p)
+	}
+	gp := guestParams(protocol.TaskHTTP, protocol.Params{Count: 20, SpeedTest: true})
+	if gp.Count != 3 || gp.SpeedTest {
+		t.Fatalf("guest http params: %+v", gp)
 	}
 }

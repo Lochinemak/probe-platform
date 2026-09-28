@@ -16,6 +16,12 @@ type Config struct {
 	DataDir           string
 	AgentToken        string
 	AdminPassword     string
+	AdminUser         string // username for password login (default admin)
+	GuestAccess       bool   // anonymous visitors may run probes (limited view)
+	LogtoEndpoint     string // https://auth.example.com (the /oidc suffix is added)
+	LogtoAppID        string
+	LogtoAppSecret    string
+	LogtoAdmins       string        // comma-separated subs/emails/usernames allowed as admin; empty = any
 	TrustProxy        bool          // honour X-Forwarded-For / X-Real-IP
 	GeoIPOnline       bool          // look up agent public IPs via ip-api.com
 	IP2RegionDB       string        // path to ip2region xdb for offline hop annotation
@@ -62,6 +68,12 @@ func LoadConfig(args []string) Config {
 	fs.StringVar(&c.DataDir, "data", envOr("PROBE_DATA_DIR", "./data"), "data directory (sqlite db, token file, geoip db)")
 	fs.StringVar(&c.AgentToken, "agent-token", envOr("PROBE_AGENT_TOKEN", ""), "shared secret agents authenticate with (generated and stored in data dir when empty)")
 	fs.StringVar(&c.AdminPassword, "admin-password", envOr("PROBE_ADMIN_PASSWORD", ""), "dashboard password (empty = no login)")
+	fs.StringVar(&c.AdminUser, "admin-user", envOr("PROBE_ADMIN_USER", "admin"), "username for password login")
+	fs.BoolVar(&c.GuestAccess, "guest", envBool("PROBE_GUEST", true), "let anonymous visitors run probes and view results (node details hidden)")
+	fs.StringVar(&c.LogtoEndpoint, "logto-endpoint", envOr("PROBE_LOGTO_ENDPOINT", ""), "Logto (OIDC) endpoint, e.g. https://auth.example.com")
+	fs.StringVar(&c.LogtoAppID, "logto-app-id", envOr("PROBE_LOGTO_APP_ID", ""), "Logto application id")
+	fs.StringVar(&c.LogtoAppSecret, "logto-app-secret", envOr("PROBE_LOGTO_APP_SECRET", ""), "Logto application secret (traditional web app); empty for a public app with PKCE only")
+	fs.StringVar(&c.LogtoAdmins, "logto-admins", envOr("PROBE_LOGTO_ADMINS", ""), "comma-separated Logto users (sub, email or username) allowed as admin; empty = every Logto user")
 	fs.BoolVar(&c.TrustProxy, "trust-proxy", envBool("PROBE_TRUST_PROXY", false), "trust X-Forwarded-For (set when behind nginx/caddy)")
 	fs.BoolVar(&c.GeoIPOnline, "geoip-online", envBool("PROBE_GEOIP_ONLINE", true), "look up agent public IP location via ip-api.com")
 	fs.StringVar(&c.IP2RegionDB, "ip2region-db", envOr("PROBE_IP2REGION_DB", ""), "path to ip2region xdb (default <data>/ip2region.xdb if present)")

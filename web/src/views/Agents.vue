@@ -7,6 +7,7 @@ import Onboarding from '../components/Onboarding.vue'
 const props = defineProps({
   agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' },
   serverVersion: { type: String, default: '' },
+  admin: { type: Boolean, default: true },
 })
 const agents = ref([])
 const error = ref('')
@@ -26,7 +27,7 @@ async function remove(a) {
   try { await api.deleteAgent(a.id); await load() } catch (e) { error.value = e.message }
 }
 const online = computed(() => agents.value.filter((a) => a.online).length)
-onMounted(() => { load(); loadDownloads(); timer = setInterval(load, 5000) })
+onMounted(() => { load(); if (props.admin) loadDownloads(); timer = setInterval(load, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 
@@ -35,7 +36,24 @@ onBeforeUnmount(() => clearInterval(timer))
     <div class="error-box" v-if="error">{{ error }}</div>
     <div class="card">
       <h3>节点列表 <span class="sub">{{ online }} 在线 / {{ agents.length }} 总数</span></h3>
-      <div class="table-wrap">
+      <div class="table-wrap" v-if="!props.admin">
+        <table class="grid">
+          <thead><tr><th></th><th>名称</th><th>位置</th><th>运营商</th><th>能力</th><th class="num">运行中</th></tr></thead>
+          <tbody>
+            <tr v-for="a in agents" :key="a.id">
+              <td><span class="status-dot" :class="{ online: a.online }"></span></td>
+              <td><b>{{ a.name }}</b></td>
+              <td>{{ a.location || '-' }}</td>
+              <td>{{ a.isp || '-' }}</td>
+              <td><span v-for="c in a.capabilities" :key="c" class="badge" style="margin-right:4px">{{ c }}</span></td>
+              <td class="num">{{ a.running || 0 }}</td>
+            </tr>
+            <tr v-if="!agents.length"><td colspan="6" class="empty">暂无节点</td></tr>
+          </tbody>
+        </table>
+        <p class="sub">游客视图只显示节点的位置与运营商；管理员登录后可查看公网 IP、版本等信息并接入新节点。</p>
+      </div>
+      <div class="table-wrap" v-else>
         <table class="grid">
           <thead>
             <tr>
@@ -65,6 +83,6 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
     </div>
 
-    <Onboarding :agent-image="props.agentImage" :server-version="props.serverVersion" :downloads="downloads" />
+    <Onboarding v-if="props.admin" :agent-image="props.agentImage" :server-version="props.serverVersion" :downloads="downloads" />
   </div>
 </template>

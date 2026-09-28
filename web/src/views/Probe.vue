@@ -3,6 +3,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api, subscribe } from '../api.js'
 import TaskResults from '../components/TaskResults.vue'
 
+const props = defineProps({ role: { type: String, default: 'admin' } })
 const type = ref('ping')
 const target = ref('')
 const error = ref('')
@@ -201,7 +202,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); if (unsubscribe) unsubscribe(
           <div class="field"><label>期望状态码（0 = 任意 &lt; 400）</label><input type="number" min="0" max="599" v-model.number="httpExtra.expect_status" /></div>
           <div class="field"><label>响应体包含关键字</label><input type="text" v-model="httpExtra.expect_keyword" placeholder="留空不检查" /></div>
           <div class="field"><label>总耗时上限 (ms，0 不检查)</label><input type="number" min="0" v-model.number="httpExtra.expect_max_ms" /></div>
-          <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="httpExtra.speed_test" /> 下载测速</label>
+          <label class="field inline" style="margin-top:18px" v-if="props.role === 'admin'"><input type="checkbox" v-model="httpExtra.speed_test" /> 下载测速</label>
           <div class="field" v-if="httpExtra.speed_test"><label>测速时长 (s)</label><input type="number" min="1" max="60" v-model.number="httpExtra.speed_seconds" /></div>
           <div class="field" style="flex-basis:100%"></div>
           <div class="field grow"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="httpExtra.headers" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>

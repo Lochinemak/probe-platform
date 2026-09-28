@@ -9,14 +9,22 @@ const error = ref('')
 const notice = ref('')
 const testing = ref('')
 
-const typeLabels = { telegram: 'Telegram 机器人', wecom: '企业微信群机器人', dingtalk: '钉钉群机器人', bark: 'Bark（iOS 推送）', webhook: '通用 Webhook', smtp: '邮件 (SMTP)' }
+const typeLabels = { telegram: 'Telegram 机器人', wecom: '企业微信群机器人', dingtalk: '钉钉群机器人', bark: 'Bark（iOS 推送）', webhook: '通用 Webhook', smtp: '邮件 (SMTP)', pushdeer: 'PushDeer', gotify: 'Gotify' }
+// [label, placeholder]; a "type.field" key overrides the plain field key for that channel type.
 const fieldLabels = {
   bot_token: ['Bot Token', '@BotFather 给的 token'], chat_id: ['Chat ID', '用户或群的 chat_id'],
   webhook_url: ['Webhook 地址', '群机器人的完整 URL'], secret: ['加签密钥（可选）', '钉钉「加签」的 SEC 开头密钥'],
   url: ['地址', 'Bark 填 https://api.day.app/<你的key>；Webhook 填接收 JSON 的地址'], auth_header: ['认证头（可选）', '例如 Authorization: Bearer xxx'],
   host: ['SMTP 主机', 'smtp.qq.com'], port: ['端口', '465 或 587'], username: ['用户名', ''], password: ['密码 / 授权码', ''],
   from: ['发件人', 'probe@example.com'], to: ['收件人', '多个用逗号分隔'], tls: ['加密', 'ssl（465）或 starttls（587），留空自动'],
+  pushkey: ['PushKey', 'PushDeer App「设备」页里的 key，多个用逗号分隔'],
+  'pushdeer.server': ['服务器地址（自建填）', '留空用官方 api2.pushdeer.com；自建填 http://ip:8800'],
+  'gotify.server': ['服务器地址', '例如 https://gotify.example.com'],
+  token: ['应用 Token', 'Gotify「Apps」里新建应用得到的 token'],
+  priority: ['优先级（可选）', '0–10，留空为 5；≥4 手机会响铃'],
 }
+const labelOf = (type, f) => fieldLabels[type + '.' + f] || fieldLabels[f] || [f, '']
+const secretFields = ['password', 'bot_token', 'secret', 'pushkey', 'token']
 
 async function load() {
   try { const r = await api.channels(); channels.value = r.channels; types.value = r.types } catch (e) { if (e.status !== 401) error.value = e.message }
@@ -59,9 +67,9 @@ onMounted(load)
           <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.enabled" /> 启用</label>
         </div>
         <div class="row" style="gap:16px;margin-top:10px">
-          <div class="field" v-for="f in types[editing.type] || []" :key="f" :class="{ grow: ['url', 'webhook_url'].includes(f) }">
-            <label>{{ (fieldLabels[f] || [f])[0] }}</label>
-            <input :type="['password', 'bot_token', 'secret'].includes(f) ? 'password' : 'text'" v-model="editing.config[f]" :placeholder="(fieldLabels[f] || ['', ''])[1]" spellcheck="false" autocomplete="off" />
+          <div class="field" v-for="f in types[editing.type] || []" :key="f" :class="{ grow: ['url', 'webhook_url', 'server'].includes(f) }">
+            <label>{{ labelOf(editing.type, f)[0] }}</label>
+            <input :type="secretFields.includes(f) ? 'password' : 'text'" v-model="editing.config[f]" :placeholder="labelOf(editing.type, f)[1]" spellcheck="false" autocomplete="off" />
           </div>
         </div>
         <div class="row" style="margin-top:12px">
@@ -84,14 +92,14 @@ onMounted(load)
             <td><span class="status-dot" :class="{ online: c.enabled }"></span></td>
             <td><b>{{ c.name }}</b></td>
             <td>{{ typeLabels[c.type] || c.type }}</td>
-            <td class="sub mono" style="white-space:normal">{{ Object.entries(c.config).filter(([k, v]) => v && !['bot_token', 'password', 'secret'].includes(k)).map(([k, v]) => k + '=' + v).join('  ') }}</td>
+            <td class="sub mono" style="white-space:normal">{{ Object.entries(c.config).filter(([k, v]) => v && !secretFields.includes(k)).map(([k, v]) => k + '=' + v).join('  ') }}</td>
             <td>
               <button class="btn sm" @click="test(c)" :disabled="testing === c.id">{{ testing === c.id ? '发送中…' : '发送测试' }}</button>
               <button class="btn sm" @click="startEdit(c)">编辑</button>
               <button class="btn sm danger" @click="remove(c)">删除</button>
             </td>
           </tr>
-          <tr v-if="!channels.length"><td colspan="5" class="empty">还没有通知渠道。支持 Telegram、企业微信、钉钉、Bark、通用 Webhook 和邮件。</td></tr>
+          <tr v-if="!channels.length"><td colspan="5" class="empty">还没有通知渠道。支持 Telegram、企业微信、钉钉、Bark、PushDeer（含自建）、Gotify、通用 Webhook 和邮件。</td></tr>
         </tbody>
       </table>
     </div>

@@ -9,7 +9,7 @@
 | **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
 | **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
 | **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
-| **定时监控 + 告警** | 按 30 秒到 24 小时的间隔持续拨测，结果入库并绘制各节点延迟 / 丢包趋势图；阈值 + 连续失败次数触发告警，恢复时再通知；Telegram / 企业微信 / 钉钉 / Bark / Webhook / 邮件 |
+| **定时监控 + 告警** | 按 30 秒到 24 小时的间隔持续拨测，结果入库并绘制各节点延迟 / 丢包趋势图；阈值 + 连续失败次数触发告警，恢复时再通知；Telegram / 企业微信 / 钉钉 / Bark / PushDeer / Gotify / Webhook / 邮件 |
 
 ## 架构
 
@@ -145,7 +145,7 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 - 详情页按 1 小时 ～ 30 天查看各节点的延迟和丢包曲线（超过 6 小时按 5 分钟 / 30 分钟 / 2 小时聚合），点图例可隐藏节点；下面是每个节点的当前状态、告警记录和最近运行（可点开看完整结果）。
 - **失败的定义**：探测出错、ping/tcping 全部丢包、HTTP 断言未通过（状态码 / 关键字 / 耗时）、MTR 未到达目标、DNS 非 NOERROR。在此之上可以再设「丢包 ≥ x%」「延迟 ≥ y ms」。
 - **告警**：某节点连续 N 次失败（默认 2）触发一次「异常」通知，之后不再重复；恢复正常时发一次「恢复」通知并带上持续时长。每个 (监控, 节点) 独立判断。
-- **通知渠道**（「通知」页）：Telegram 机器人、企业微信群机器人、钉钉群机器人（支持加签）、Bark、通用 Webhook（POST JSON `{title, text, at}`，可加认证头）、SMTP 邮件（465 SSL 或 587 STARTTLS）。保存后可发送测试消息。
+- **通知渠道**（「通知」页）：Telegram 机器人、企业微信群机器人、钉钉群机器人（支持加签）、Bark、PushDeer（官方或自建服务器，填 PushKey）、Gotify（自建服务器 + 应用 Token，可设优先级）、通用 Webhook（POST JSON `{title, text, at}`，可加认证头）、SMTP 邮件（465 SSL 或 587 STARTTLS）。保存后可发送测试消息。
 - 数据保留：样本随 `PROBE_RETAIN_DAYS`（默认 90 天）；每次运行的完整结果只保留 `PROBE_MONITOR_TASK_RETAIN_HOURS`（默认 48 小时），避免数据库膨胀。设置 `PROBE_BASE_URL` 后通知里会带详情链接。
 - 监控产生的运行默认不出现在「历史」页，勾选「含定时监控的运行」可查看。
 
@@ -165,7 +165,9 @@ server（flag 或环境变量）：
 | `PROBE_LISTEN` | `:8080` | 监听地址 |
 | `PROBE_DATA_DIR` | `./data` | SQLite、token、ip2region 库所在目录 |
 | `PROBE_AGENT_TOKEN` | 自动生成 | agent 共享密钥 |
-| `PROBE_ADMIN_PASSWORD` | 空（无登录） | Dashboard 密码，公网部署务必设置 |
+| `PROBE_ADMIN_USER` / `PROBE_ADMIN_PASSWORD` | `admin` / 空 | 管理员用户名和密码；密码为空且未配 Logto 时为开放模式 |
+| `PROBE_GUEST` | `true` | 允许游客（未登录）发起拨测、查看结果 |
+| `PROBE_LOGTO_ENDPOINT` / `PROBE_LOGTO_APP_ID` / `PROBE_LOGTO_APP_SECRET` / `PROBE_LOGTO_ADMINS` | 空 | Logto 登录，见「访问控制」一节 |
 | `PROBE_TRUST_PROXY` | `false` | 反向代理后设为 `true` |
 | `PROBE_GEOIP_ONLINE` | `true` | 用 ip-api.com 识别 agent 位置 |
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
@@ -180,7 +182,7 @@ agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为
 
 ## API
 
-所有接口返回 JSON；设置了密码时需先 `POST /api/login {"password": "..."}` 获取 Cookie。
+所有接口返回 JSON；管理员接口需先 `POST /api/login {"username": "admin", "password": "..."}` 获取 Cookie（游客可直接调用拨测相关接口）。
 
 ```bash
 # 对所有在线节点做 tcping
@@ -226,7 +228,7 @@ curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/download/
 cmd/server, cmd/agent      入口
 internal/protocol          server / agent / 前端共享的消息与结果类型
 internal/probe             ping（pro-bing）、tcping、http（httptrace + 断言 + 测速）、mtr（ICMP / TCP / UDP 引擎）、dns
-internal/server            另含 scheduler（定时监控与告警状态机）、notify（六种通知渠道）
+internal/server            另含 scheduler（定时监控与告警状态机）、notify（八种通知渠道）
 internal/agent             WebSocket 客户端、任务执行、重连
 internal/server            hub（连接与任务调度）、SQLite 存储、HTTP/SSE API、鉴权、GeoIP
 web/                       Vue 3 + Vite 前端，构建后由 server embed
@@ -248,8 +250,26 @@ deploy/                    Dockerfile、compose、systemd、安装脚本、反�
 
 不推荐的做法：把 OpenClash 整体切到 redir-host 模式（影响全家上网体验）、维护 fake-ip-filter 白名单（对任意拨测目标不可维护）、只改 DNS 不加黑名单（OpenClash 通常劫持所有 53 端口流量，换了上游也会被截回来；而且境外目标仍被透明代理）。
 
+## 访问控制：游客与管理员
+
+- **未配置任何登录方式**（没有 `PROBE_ADMIN_PASSWORD` 也没有 Logto）：开放模式，所有人都是管理员，只适合内网。
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果和历史，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」页。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。`PROBE_GUEST=false` 可关闭游客访问，届时所有功能都需要登录。
+- **管理员**：右上角「管理员登录」。两种方式：
+  - 用户名 + 密码：`PROBE_ADMIN_USER`（默认 `admin`）和 `PROBE_ADMIN_PASSWORD`。
+  - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：
+
+    | 变量 | 说明 |
+    | --- | --- |
+    | `PROBE_LOGTO_ENDPOINT` | 租户地址，如 `https://auth.example.com`（会自动加 `/oidc`） |
+    | `PROBE_LOGTO_APP_ID` | Logto 应用 ID（类型选 Traditional Web） |
+    | `PROBE_LOGTO_APP_SECRET` | 应用密钥；留空则按公开应用只用 PKCE |
+    | `PROBE_LOGTO_ADMINS` | 允许成为管理员的用户，逗号分隔，可填 sub、邮箱或用户名；留空表示该租户的任何用户都是管理员 |
+    | `PROBE_BASE_URL` | 必填，回调地址为 `<BASE_URL>/api/auth/logto/callback`，需在 Logto 应用的 Redirect URIs 里登记 |
+
+  会话是 HMAC 签名的 Cookie，30 天有效；改密码、Logto 密钥或 agent token 会让所有会话失效。
+
 ## 安全说明
 
-- Dashboard 能让任意在线节点向任意目标发包，**公网部署必须设置 `PROBE_ADMIN_PASSWORD` 并使用 HTTPS**。
+- Dashboard 能让任意在线节点向任意目标发包，**公网部署必须配置管理员登录并使用 HTTPS**；开放游客访问时请评估被滥用的风险（已有频率与参数限制，仍可 `PROBE_GUEST=false` 关闭）。
 - agent 只接受 server 下发的四种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB）。
 - **所有 agent 目前共用一个 token**（`PROBE_AGENT_TOKEN`）。它只能让持有者以任意名字注册成节点、接收任务、下载 agent 二进制，不能登录 Dashboard 或查看历史。泄露后轮换：改 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）并重启 server，然后逐台改 `/etc/probe-agent.env`（或容器环境变量）再重启 agent；自更新机制不负责分发 token。若节点分散在多个不完全信任的地方，可以考虑改为每节点独立 token 并在 Dashboard 上签发 / 吊销，目前尚未实现。

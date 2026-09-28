@@ -74,7 +74,7 @@ func TestAgentDownloadAPI(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "probe-agent-linux-amd64", "binary-bytes")
 	writeFile(t, dir, "install-agent.sh", "#!/bin/sh\necho hi\n")
-	cfg := Config{AdminPassword: "pw", AgentToken: "tok", TaskTimeout: time.Minute, AgentsDir: dir}
+	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, AgentsDir: dir}
 	files := NewAgentFiles(dir, discardLogger())
 	hub := NewHub(cfg, st, nil, files, discardLogger())
 	srv := httptest.NewServer(NewHandler(cfg, hub, st, emptyFS{}, nil, nil, discardLogger()))
@@ -124,7 +124,7 @@ func TestAgentDownloadAPI(t *testing.T) {
 	}
 	jar, _ := cookiejar.New(nil)
 	sess := &http.Client{Jar: jar}
-	if resp, err := sess.Post(srv.URL+"/api/login", "application/json", strings.NewReader(`{"password":"pw"}`)); err != nil || resp.StatusCode != 200 {
+	if resp, err := sess.Post(srv.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"pw"}`)); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("login: %v %v", err, resp)
 	}
 	resp, _ := sess.Get(srv.URL + "/api/agent/token")

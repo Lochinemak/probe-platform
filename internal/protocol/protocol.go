@@ -221,7 +221,7 @@ type AlertEvent struct {
 type NotifyChannel struct {
 	ID        string            `json:"id"`
 	Name      string            `json:"name"`
-	Type      string            `json:"type"` // telegram, wecom, dingtalk, bark, webhook, smtp
+	Type      string            `json:"type"` // telegram, wecom, dingtalk, bark, webhook, smtp, pushdeer, gotify
 	Config    map[string]string `json:"config"`
 	Enabled   bool              `json:"enabled"`
 	CreatedAt time.Time         `json:"created_at"`

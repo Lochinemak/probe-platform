@@ -19,7 +19,7 @@ async function request(method, url, body) {
 
 export const api = {
   session: () => request('GET', '/api/session'),
-  login: (password) => request('POST', '/api/login', { password }),
+  login: (username, password) => request('POST', '/api/login', { username, password }),
   logout: () => request('POST', '/api/logout'),
   agents: () => request('GET', '/api/agents'),
   deleteAgent: (id) => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),

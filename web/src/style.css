@@ -147,3 +147,5 @@ textarea { width: 100%; min-width: 260px; font-family: var(--mono); font-size: 1
 .uplot .u-legend .u-series > * { padding: 2px 6px; }
 .uplot .u-legend .u-series th { font-weight: 500; }
 .badge.ok { color: var(--ok); } .badge.bad { color: var(--bad); }
+
+.login.modal { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); margin: 0; width: min(380px, calc(100vw - 32px)); z-index: 900; box-shadow: 0 16px 48px rgba(0,0,0,.35); }
