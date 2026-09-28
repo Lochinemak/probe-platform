@@ -1,9 +1,10 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
 import { typeLabel, timeAgo, ms, pct } from '../fmt.js'
 import MonitorDetail from '../components/MonitorDetail.vue'
 
+const props = defineProps({ initialId: String })
 const emit = defineEmits(['open-history'])
 const monitors = ref([])
 const agents = ref([])
@@ -91,7 +92,8 @@ function agentClass(st) {
 }
 const totalAlerting = computed(() => monitors.value.reduce((s, m) => s + (m.alerting || 0), 0))
 
-onMounted(() => { load(); loadChannels(); timer = setInterval(load, 15000) })
+watch(() => props.initialId, (id) => { if (id) detailId.value = id })
+onMounted(() => { load(); loadChannels(); timer = setInterval(load, 15000); if (props.initialId) detailId.value = props.initialId })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 

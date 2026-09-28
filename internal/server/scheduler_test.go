@@ -151,7 +151,7 @@ func TestAlertStateMachine(t *testing.T) {
 	}
 	text, _ := calls[0]["text"].(string)
 	if !containsAll(text, "失败 2 个节点", "· home（广东 深圳 电信）：丢包 60%，阈值 50%（新告警，连续 2 次）", "· nas：丢包 60%",
-		"正常 1 个节点", "· cloud：10.0 ms", "https://probe.example.com/#/monitor/m1") {
+		"正常 1 个节点", "· cloud：10.0 ms", "https://probe.example.com/monitors?id=m1") {
 		t.Fatalf("down text: %q", text)
 	}
 

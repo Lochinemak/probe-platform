@@ -37,6 +37,7 @@ const password = ref('')
 const loginError = ref('')
 const busy = ref(false)
 const historyTaskId = ref('')
+const monitorId = ref('')
 
 const isAdmin = computed(() => session.value?.role === 'admin')
 // With guest access off and no session the whole app sits behind the login.
@@ -87,6 +88,8 @@ onMounted(() => {
     loginError.value = params.get('login_error')
     showLogin.value = true
     history.replaceState(null, '', location.pathname)
+  } else if (params.get('id')) {
+    monitorId.value = params.get('id')
   }
   loadSession()
   window.addEventListener('probe:unauthorized', onUnauthorized)
@@ -150,7 +153,7 @@ watch(tab, (t) => { document.title = `${TABS[t].label} · 拨测平台` }, { imm
     <template v-if="session && !gated">
       <div v-show="!showLogin">
         <ProbeView v-show="tab === 'probe'" :role="session.role" @open-history="openHistory" />
-        <MonitorsView v-if="tab === 'monitors' && isAdmin" @open-history="openHistory" />
+        <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openHistory" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
         <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" :admin="isAdmin" />

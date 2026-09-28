@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -403,7 +404,7 @@ func (s *Scheduler) notifyRun(m *protocol.Monitor, outcomes []*agentOutcome, at 
 	}
 	lines = append(lines, "时间："+at.Format("2006-01-02 15:04:05"))
 	if base := strings.TrimSuffix(s.baseURL(), "/"); base != "" {
-		lines = append(lines, "详情："+base+"/#/monitor/"+m.ID)
+		lines = append(lines, "详情："+base+"/monitors?id="+url.QueryEscape(m.ID))
 	}
 	text := strings.Join(lines, "\n")
 	for _, id := range m.NotifyIDs {
