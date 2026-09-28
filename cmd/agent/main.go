@@ -1,16 +1,23 @@
 // Command probe-agent connects to a probe-platform server and executes
-// ping / tcping / http / mtr tasks on its behalf.
+// ping / tcping / http / mtr / dns tasks on its behalf.
 //
 // Usage:
 //
 //	probe-agent --server https://probe.example.com --token XXX --name home-sz --location "广东 深圳" --isp 电信
-//	probe-agent test 8.8.8.8            # run every probe type locally, no server needed
+//	probe-agent --env-file /etc/probe-agent.env      # KEY=VALUE file instead of flags / environment
+//	probe-agent test 8.8.8.8                          # run every probe type locally, no server needed
 //	probe-agent test mtr www.qq.com
 //	probe-agent version
+//	probe-agent service install --env-file C:\ProgramData\probe-agent\probe-agent.env   # Windows service
 //
 // Every flag can also be given as an environment variable: PROBE_SERVER,
 // PROBE_TOKEN, PROBE_NAME, PROBE_LOCATION, PROBE_ISP, PROBE_TAGS,
-// PROBE_CONCURRENCY, PROBE_INSECURE, PROBE_SELF_UPDATE, PROBE_LOG_LEVEL.
+// PROBE_CONCURRENCY, PROBE_INSECURE, PROBE_SELF_UPDATE, PROBE_LOG_LEVEL,
+// PROBE_LOG_FILE, PROBE_ENV_FILE.
+//
+// On Windows the agent runs as a Windows service (see `probe-agent service`):
+// it notices being started by the service control manager, logs to
+// probe-agent.log next to the executable and stops cleanly on service stop.
 package main
 
 import (
@@ -18,6 +25,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -48,6 +56,17 @@ func main() {
 			return
 		case "test":
 			os.Exit(runSelfTest(os.Args[2:]))
+		case "service":
+			os.Exit(runServiceCommand(os.Args[2:]))
+		}
+	}
+
+	// --env-file is applied before the flag defaults read the environment, so
+	// a KEY=VALUE file behaves exactly like exported variables.
+	if p := envFileFromArgs(os.Args[1:]); p != "" {
+		if err := loadEnvFile(p); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
 		}
 	}
 
@@ -62,9 +81,27 @@ func main() {
 	insecure := fs.Bool("insecure", envOr("PROBE_INSECURE", "") == "true", "skip TLS certificate verification")
 	selfUpdate := fs.Bool("self-update", envOr("PROBE_SELF_UPDATE", "true") != "false", "replace this binary when the server ships a different version")
 	logLevel := fs.String("log-level", envOr("PROBE_LOG_LEVEL", "info"), "debug|info|warn|error")
+	logFile := fs.String("log-file", envOr("PROBE_LOG_FILE", ""), "append logs to this file instead of stderr (Windows service default: probe-agent.log next to the executable)")
+	fs.String("env-file", envOr("PROBE_ENV_FILE", ""), "KEY=VALUE file applied to the environment before flags are read")
 	_ = fs.Parse(os.Args[1:])
 
-	log := newLogger(*logLevel)
+	service := runningAsService()
+	logPath := *logFile
+	if logPath == "" && service {
+		logPath = defaultServiceLogPath()
+	}
+	var out io.Writer = os.Stderr
+	if logPath != "" {
+		w, err := openRotatingFile(logPath, 5<<20)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error: open log file:", err)
+			os.Exit(2)
+		}
+		defer w.Close()
+		out = w
+	}
+	log := newLogger(*logLevel, out)
+
 	var tagList []string
 	for _, t := range strings.Split(*tags, ",") {
 		if t = strings.TrimSpace(t); t != "" {
@@ -85,16 +122,29 @@ func main() {
 		SelfUpdate:     *selfUpdate,
 	}, log)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		fs.Usage()
+		log.Error("invalid configuration", "err", err)
+		if service {
+			// Report through the SCM so `service status` / the event log show a failure instead of a start timeout.
+			_ = runAsService(log, func(context.Context) error { return err })
+		} else {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			fs.Usage()
+		}
 		os.Exit(2)
 	}
 	caps := cli.Capabilities()
-	log.Info("probe-agent starting", "version", buildinfo.Version, "arch", runtime.GOOS+"/"+runtime.GOARCH+buildinfo.Variant, "self_update", *selfUpdate, "capabilities", strings.Join(caps, ","))
+	log.Info("probe-agent starting", "version", buildinfo.Version, "arch", runtime.GOOS+"/"+runtime.GOARCH+buildinfo.Variant, "self_update", *selfUpdate, "service", service, "capabilities", strings.Join(caps, ","))
 	if !contains(caps, "icmp_raw") {
-		log.Warn("no raw ICMP socket: mtr unavailable and ping may fail; run as root, use setcap cap_net_raw+ep, or docker --cap-add NET_RAW")
+		log.Warn("no raw ICMP socket: mtr unavailable and ping may fail", "fix", probe.PrivilegeHint())
 	}
 
+	if service {
+		if err := runAsService(log, cli.Run); err != nil {
+			log.Error("service failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := cli.Run(ctx); err != nil {
@@ -119,7 +169,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level string, w io.Writer) *slog.Logger {
 	var lvl slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -131,7 +181,7 @@ func newLogger(level string) *slog.Logger {
 	default:
 		lvl = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: lvl}))
 }
 
 // runSelfTest executes probes locally and prints JSON. It is the quickest way
@@ -174,7 +224,11 @@ func runSelfTest(args []string) int {
 			}
 		}
 	}
-	fmt.Fprintln(os.Stderr, "capabilities:", strings.Join(probe.DetectCapabilities(), ","))
+	caps := probe.DetectCapabilities()
+	fmt.Fprintln(os.Stderr, "capabilities:", strings.Join(caps, ","))
+	if !contains(caps, "icmp_raw") {
+		fmt.Fprintln(os.Stderr, "no raw ICMP socket:", probe.PrivilegeHint())
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	code := 0

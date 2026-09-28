@@ -75,7 +75,8 @@ func (c *Client) selfUpdate(ctx context.Context, u protocol.Update) error {
 		exe = real
 	}
 	dir := filepath.Dir(exe)
-	tmp, err := os.CreateTemp(dir, ".probe-agent-update-*")
+	// Keep the executable's extension (".exe" on Windows) so the new file can be run for its version check.
+	tmp, err := os.CreateTemp(dir, ".probe-agent-update-*"+filepath.Ext(exe))
 	if err != nil {
 		return fmt.Errorf("cannot write next to %s: %w (install with install-agent.sh so the binary lives in the writable /var/lib/probe-agent)", exe, err)
 	}
