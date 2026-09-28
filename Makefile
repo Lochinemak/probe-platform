@@ -49,8 +49,11 @@ docker:
 run-server:
 	go run ./cmd/server --data ./data --log-level debug --agents-dir ./bin
 
+# Every node has its own token: create one on the dashboard (节点 → 接入新节点), then
+#   PROBE_TOKEN=<its token> make run-agent
 run-agent:
-	go run ./cmd/agent --server http://localhost:8080 --token "$$(cat data/agent_token)" --name dev-local --location 本机 --isp 开发 --log-level debug
+	@test -n "$$PROBE_TOKEN" || { echo "create a node on the dashboard (节点 → 接入新节点), then: PROBE_TOKEN=<its token> make run-agent" >&2; exit 1; }
+	go run ./cmd/agent --server http://localhost:8080 --name dev-local --location 本机 --isp 开发 --self-update=false --log-level debug
 
 test:
 	go test ./...

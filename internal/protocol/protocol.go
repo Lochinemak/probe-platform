@@ -85,6 +85,9 @@ type Hello struct {
 	Variant string `json:"variant,omitempty"`
 	// SelfUpdate reports whether the agent acts on MsgUpdate.
 	SelfUpdate bool `json:"self_update"`
+	// TokenHandoff reports that the agent can store a node token handed over
+	// in Welcome.Token and use it from then on (migration off the shared token).
+	TokenHandoff bool `json:"token_handoff,omitempty"`
 }
 
 // Welcome is the server's reply to Hello.
@@ -92,6 +95,10 @@ type Welcome struct {
 	AgentID    string `json:"agent_id"`
 	PublicIP   string `json:"public_ip,omitempty"`
 	ServerTime int64  `json:"server_time"`
+	// Token is this node's own token. Only sent to an agent that connected
+	// with the legacy shared token and set Hello.TokenHandoff; it should save
+	// the token and reconnect with it.
+	Token string `json:"token,omitempty"`
 }
 
 // Params carries every optional knob for every task type. Unused fields are
@@ -427,23 +434,27 @@ type DNSResult struct {
 
 // AgentStatus is what the dashboard sees for one agent.
 type AgentStatus struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Online       bool       `json:"online"`
-	Location     string     `json:"location,omitempty"`
-	ISP          string     `json:"isp,omitempty"`
-	Tags         []string   `json:"tags,omitempty"`
-	OS           string     `json:"os,omitempty"`
-	Arch         string     `json:"arch,omitempty"`
-	Version      string     `json:"version,omitempty"`
-	PublicIP     string     `json:"public_ip,omitempty"`
-	GeoLocation  string     `json:"geo_location,omitempty"` // auto-detected from PublicIP
-	GeoISP       string     `json:"geo_isp,omitempty"`
-	Capabilities []string   `json:"capabilities,omitempty"`
-	FirstSeen    time.Time  `json:"first_seen"`
-	LastSeen     time.Time  `json:"last_seen"`
-	ConnectedAt  *time.Time `json:"connected_at,omitempty"`
-	Running      int        `json:"running"` // tasks currently executing
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Online       bool     `json:"online"`
+	Location     string   `json:"location,omitempty"`
+	ISP          string   `json:"isp,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	OS           string   `json:"os,omitempty"`
+	Arch         string   `json:"arch,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	PublicIP     string   `json:"public_ip,omitempty"`
+	GeoLocation  string   `json:"geo_location,omitempty"` // auto-detected from PublicIP
+	GeoISP       string   `json:"geo_isp,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	// Auth is how the node last authenticated: "token" (its own node token),
+	// "legacy" (the old shared token, not migrated yet) or "" (created on the
+	// dashboard, never connected).
+	Auth        string     `json:"auth,omitempty"`
+	FirstSeen   time.Time  `json:"first_seen"`
+	LastSeen    time.Time  `json:"last_seen"`
+	ConnectedAt *time.Time `json:"connected_at,omitempty"`
+	Running     int        `json:"running"` // tasks currently executing
 }
 
 // ResultStatus is the lifecycle of one (task, agent) pair.

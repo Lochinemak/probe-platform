@@ -20,7 +20,7 @@ services:
       - NET_RAW
     environment:
       PROBE_SERVER: https://probe.geneyuriy.com
-      PROBE_TOKEN: "<agent token>"
+      PROBE_TOKEN: "<本节点 token>"         # 每个节点一个：Dashboard 节点页「接入新节点」创建后复制
       PROBE_NAME: qnap-home-gz            # 节点唯一名，改成你的
       PROBE_LOCATION: "广东 广州"
       PROBE_ISP: 移动

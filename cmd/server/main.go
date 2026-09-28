@@ -5,8 +5,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,17 +33,12 @@ func main() {
 		log.Error("create data dir", "err", err)
 		os.Exit(1)
 	}
+	// Nodes have their own tokens, created on the dashboard. The shared token
+	// of earlier versions is only read (never generated) so that nodes
+	// installed with it keep working until they have been migrated.
 	if cfg.AgentToken == "" {
-		tok, generated, err := loadOrCreateToken(filepath.Join(cfg.DataDir, "agent_token"))
-		if err != nil {
-			log.Error("agent token", "err", err)
-			os.Exit(1)
-		}
-		cfg.AgentToken = tok
-		if generated {
-			log.Info("generated agent token (also saved to data dir)", "token", tok, "file", filepath.Join(cfg.DataDir, "agent_token"))
-		} else {
-			log.Info("agent token loaded", "file", filepath.Join(cfg.DataDir, "agent_token"))
+		if b, err := os.ReadFile(filepath.Join(cfg.DataDir, "agent_token")); err == nil {
+			cfg.AgentToken = strings.TrimSpace(string(b))
 		}
 	}
 
@@ -66,6 +59,13 @@ func main() {
 	if err != nil {
 		log.Error("load settings", "err", err)
 		os.Exit(1)
+	}
+	switch settings.LegacyTokenState() {
+	case "enabled":
+		log.Info("legacy shared agent token accepted for nodes not migrated yet",
+			"hint", "nodes switch to their own token automatically; disable the shared token on the Agents page once all have migrated")
+	case "disabled":
+		log.Info("legacy shared agent token configured but disabled; PROBE_AGENT_TOKEN / data/agent_token can be removed")
 	}
 	if !settings.LoginEnabled() {
 		log.Warn("no admin login configured: the dashboard is OPEN to anyone who can reach it. Set PROBE_ADMIN_PASSWORD or configure Logto on the settings page.")
@@ -95,23 +95,6 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-}
-
-func loadOrCreateToken(path string) (string, bool, error) {
-	if b, err := os.ReadFile(path); err == nil {
-		if tok := strings.TrimSpace(string(b)); tok != "" {
-			return tok, false, nil
-		}
-	}
-	var raw [24]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", false, err
-	}
-	tok := hex.EncodeToString(raw[:])
-	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
-		return "", false, err
-	}
-	return tok, true, nil
 }
 
 func newLogger(level string) *slog.Logger {

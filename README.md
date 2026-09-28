@@ -38,8 +38,10 @@ make agents-all       # 交叉编译所有架构的 agent 到 bin/
 或直接用 Docker：
 
 ```bash
-cp deploy/.env.example deploy/.env   # 填 PROBE_AGENT_TOKEN / PROBE_ADMIN_PASSWORD
+cp deploy/.env.example deploy/.env   # 填 PROBE_ADMIN_PASSWORD
 docker compose -f deploy/docker-compose.yml up -d --build
+# 同机再跑一个 agent：在「节点」页创建节点，把它的 token 填进 .env 的 LOCAL_AGENT_TOKEN，然后
+docker compose -f deploy/docker-compose.yml --profile local-agent up -d
 ```
 
 ### 2. 启动 server
@@ -48,32 +50,34 @@ docker compose -f deploy/docker-compose.yml up -d --build
 PROBE_ADMIN_PASSWORD=你的密码 ./bin/probe-server --listen :8080 --data ./data
 ```
 
-首次启动会自动生成 agent token 写入 `data/agent_token` 并打印在日志里。打开 <http://localhost:8080>。
+打开 <http://localhost:8080>，到「节点」页创建节点，拿到该节点的 token 和安装命令。
 
 生产环境建议放在 Caddy / nginx 后面加 HTTPS（示例见 `deploy/Caddyfile.example`、`deploy/nginx.conf.example`），并设置 `PROBE_TRUST_PROXY=true` 让 server 正确识别 agent 的公网 IP。
 
 ### 3. 接入 agent
 
+**每个节点有自己的 token，token 就是节点的身份。** 在 Dashboard「节点」页的「接入新节点」里填节点名、位置、运营商，点「创建节点」，下面就会出现填好本服务器地址和该节点 token 的各平台命令，点「复制」到目标机器上粘贴执行即可。已有节点的命令随时可以在节点列表点「安装命令」再取。
+
 **Linux + systemd 一条命令**（推荐，之后随 dashboard 自动更新）：
 
 ```bash
 export PROBE_SERVER=https://probe.example.com
-export PROBE_TOKEN=<data/agent_token 的内容>
+export PROBE_TOKEN=<该节点的 token>
 export PROBE_NAME=home-shenzhen
 export PROBE_LOCATION="广东 深圳"
 export PROBE_ISP=电信
 curl -fsSL $PROBE_SERVER/install-agent.sh | sudo -E sh
 ```
 
-Dashboard 的「节点」页会按你的服务器地址、token 和填写的节点名生成可直接复制的版本。
+Dashboard 的「节点」页会按你的服务器地址、节点 token 和填写的节点名生成可直接复制的版本。
 
-脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mipsle / mips / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。重复执行即升级或改配置。
+脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mipsle / mips / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。用同一个 token 重复执行即覆盖安装（升级、修复或改配置，见 3.1）。
 
 **OpenWrt / iStoreOS 路由器**（procd，无 systemd，以 root 运行）：
 
 ```bash
 export PROBE_SERVER=https://probe.example.com
-export PROBE_TOKEN=<token>
+export PROBE_TOKEN=<该节点的 token>
 export PROBE_NAME=home-router
 export PROBE_LOCATION="广东 深圳"
 export PROBE_ISP=电信
@@ -89,7 +93,7 @@ curl -fsSL $PROBE_SERVER/install-agent-openwrt.sh | sh
 
 ```powershell
 $env:PROBE_SERVER='https://probe.example.com'
-$env:PROBE_TOKEN='<data/agent_token 的内容>'
+$env:PROBE_TOKEN='<该节点的 token>'
 $env:PROBE_NAME='home-win'
 $env:PROBE_LOCATION='广东 深圳'
 $env:PROBE_ISP='电信'
@@ -101,19 +105,20 @@ Dashboard「节点」页会生成填好的版本。
 - **系统要求与依赖**：Windows 10 / 11 或 Windows Server 2016 及以上（Go 运行时的下限，Windows 7 / 8 不支持），x64、ARM64、32 位 x86 都有构建，脚本按 CPU 自动选择。**不需要安装任何运行库**：agent 是单个静态链接的 exe，不依赖 .NET、VC++ 运行库或 Npcap；安装脚本只用系统自带的 PowerShell 5.1，并会先检查管理员权限、系统版本、CPU 架构，强制 TLS 1.2 以兼容旧版 .NET 的下载。
 - **安装到哪**：`C:\ProgramData\probe-agent\`，含 `probe-agent.exe`、配置 `probe-agent.env`（仅 SYSTEM 与管理员可读）、日志 `probe-agent.log`（5 MB 轮转一次）。服务名 `probe-agent`（显示为 probe-platform agent），以 LocalSystem 运行，raw socket 权限齐全，ping / MTR（ICMP、UDP、TCP 三种）全部可用；服务异常退出 5 秒内由服务管理器自动拉起——自更新在 Windows 上就是靠这个完成重启（Windows 不能原地 exec）。
 - **防火墙**：脚本给这个 exe 加两条入站规则（仅 ICMPv4 / ICMPv6），保证 ping 与 MTR 的回包能到达 raw socket；agent 不监听任何端口。360、火绒之类安全软件可能拦截新装的服务或未签名的 exe，放行即可；Defender 偶尔会对 Go 程序误报，可把该目录加入排除项。
-- **管理**：管理员 PowerShell 里 `& 'C:\ProgramData\probe-agent\probe-agent.exe' service status`（或 `restart` / `stop` / `uninstall`），或在「服务」管理器里找 probe-platform agent；本地验证 `& 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com`。重复执行安装命令即升级或改配置。
+- **管理**：管理员 PowerShell 里 `& 'C:\ProgramData\probe-agent\probe-agent.exe' service status`（或 `restart` / `stop` / `uninstall`），或在「服务」管理器里找 probe-platform agent；本地验证 `& 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com`。用同一个 token 重复执行安装命令即覆盖安装。
 - **注意**：电脑睡眠时节点离线，建议在「电源和睡眠」里把睡眠设为「从不」，或者只用常开的机器。
 
-**群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数；Dashboard 节点页也会生成填好地址、token 和节点名的版本。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
+**群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数；Dashboard 节点页也会生成填好地址、节点 token 和节点名的版本。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
 
 **Docker**（Unraid / 任意有 Docker 的机器）：
 
 ```bash
 export PROBE_SERVER=https://probe.example.com
-export PROBE_TOKEN=<data/agent_token 的内容>
+export PROBE_TOKEN=<该节点的 token>
 export PROBE_NAME=home-shenzhen
 export PROBE_LOCATION="广东 深圳"
 export PROBE_ISP=电信
+docker rm -f probe-agent 2>/dev/null   # 覆盖安装：先删旧容器
 docker run -d --name probe-agent --restart unless-stopped \
   --network host --cap-add NET_RAW \
   -e PROBE_SERVER -e PROBE_TOKEN -e PROBE_NAME -e PROBE_LOCATION -e PROBE_ISP \
@@ -134,7 +139,16 @@ sudo /var/lib/probe-agent/probe-agent test www.qq.com   # 已用 systemd 安装�
 
 节点页会显示每个 agent 检测到的能力（`icmp_raw` / `mtr` / `ipv6`）。没有 raw socket 权限时 MTR 不可用，ping 会退回到非特权 ICMP（Linux 需要 `net.ipv4.ping_group_range` 覆盖运行用户的 gid）。
 
-### 3.1 agent 自动更新
+### 3.1 节点 token、覆盖安装与吊销
+
+- **节点身份 = token**。服务端按 token 认节点，节点自报的 `PROBE_NAME` 只是显示名：改名不会变成新节点，拿别人的名字也冒充不了别人。节点 ID 在创建时由节点名生成，之后固定不变，历史记录和监控都挂在 ID 上。
+- **覆盖安装**：同一个 token 重新执行安装命令（任何平台都一样），就是原地覆盖——升级、修复损坏的安装、改位置 / 运营商 / 显示名，甚至换一台机器。Dashboard 上还是同一个节点，历史和监控不变。如果旧机器上的 agent 还开着，新旧两边会互相顶掉连接，记得把旧的卸掉。
+- **找回命令**：节点列表点「安装命令」随时能看到该节点的 token 和各平台命令（token 默认打码，勾「显示 token」才完整显示，「复制」复制的是完整命令）。
+- **重置 token**：同一个面板里点「重置 token」，旧 token 立即失效，正在运行的 agent 被断开，直到用新命令重装。适合 token 泄露、机器送人或借出之后。
+- **删除节点**：在线、离线都能删。删除即吊销：token 立即失效，在线的 agent 会被断开且再也连不上；历史结果保留。要重新接入只能新建节点。
+- token 只能用来以这个节点的身份连接、接收任务和下载 agent 二进制，不能登录 Dashboard 或查看历史。
+
+### 3.2 agent 自动更新
 
 server 镜像里自带所有平台的 agent 二进制（`PROBE_AGENTS_DIR`，Docker 镜像默认 `/usr/share/probe-platform/agents`）。流程：
 
@@ -149,16 +163,26 @@ server 镜像里自带所有平台的 agent 二进制（`PROBE_AGENTS_DIR`，Doc
 - `PROBE_SELF_UPDATE=false` 关闭；Docker 镜像里默认关闭。
 - 早期用 `/usr/local/bin` + setcap 方式安装的节点重新跑一次安装脚本即可迁移到新布局。
 
-### 3.2 卸载 agent
+### 3.3 卸载 agent
 
-一条命令，Linux（systemd）和 OpenWrt / iStoreOS（procd）通用。脚本自动识别安装方式：停掉并禁用服务，删除二进制及自更新残留（`probe-agent.prev`、`.probe-agent-update-*`）、`/etc/probe-agent.env`、systemd unit / init 脚本、`probe-agent` 系统用户；顺带清掉早期 `/usr/local/bin` 布局的文件。没装过或重复执行都无副作用。
+一条命令，Linux（systemd）和 OpenWrt / iStoreOS（procd）通用。脚本自动识别安装方式：停掉并禁用服务，删除二进制及自更新残留（`probe-agent.prev`、`.probe-agent-update-*`）、迁移时留下的 `probe-agent.token`、`/etc/probe-agent.env`、systemd unit / init 脚本、`probe-agent` 系统用户；顺带清掉早期 `/usr/local/bin` 布局的文件。没装过或重复执行都无副作用。
 
 ```bash
 curl -fsSL https://probe.example.com/uninstall-agent.sh | sudo sh      # Linux
 curl -fsSL https://probe.example.com/uninstall-agent.sh | sh           # OpenWrt / iStoreOS（已是 root）
 ```
 
-想保留配置以便之后重装：`curl -fsSL .../uninstall-agent.sh | sudo sh -s -- --keep-config`（`--keep-user` 保留系统用户）。Windows 在管理员 PowerShell 里执行 `$env:PROBE_UNINSTALL='1'; irm https://probe.example.com/install-agent.ps1 | iex`，会停止并删除服务、防火墙规则和 `C:\ProgramData\probe-agent` 目录（`$env:PROBE_KEEP_CONFIG='1'` 保留配置文件）。Docker 节点不归脚本管：`docker rm -f probe-agent`，群晖 / 威联通在 Container Manager / Container Station 里删除该项目即可。卸载不会删除 dashboard 里的节点记录，节点会变成离线，到「节点」页删除。
+想保留配置以便之后重装：`curl -fsSL .../uninstall-agent.sh | sudo sh -s -- --keep-config`（`--keep-user` 保留系统用户；迁移过的节点会把自己的 token 写回保留的 env 文件）。Windows 在管理员 PowerShell 里执行 `$env:PROBE_UNINSTALL='1'; irm https://probe.example.com/install-agent.ps1 | iex`，会停止并删除服务、防火墙规则和 `C:\ProgramData\probe-agent` 目录（`$env:PROBE_KEEP_CONFIG='1'` 保留配置文件）。Docker 节点不归脚本管：`docker rm -f probe-agent`，群晖 / 威联通在 Container Manager / Container Station 里删除该项目即可。卸载只清理那台机器：dashboard 里的节点记录和它的 token 都还在（节点显示离线），之后可以用同一条命令重新装回来；要让 token 失效，到「节点」页删除节点。
+
+### 3.4 从旧版共享 token 迁移
+
+早期版本所有节点共用一个 token（`PROBE_AGENT_TOKEN` 或 `data/agent_token`）。升级后：
+
+1. **server 仍接受旧共享 token，但只对升级前就存在、还没迁移的节点有效**：陌生名字拿共享 token 连不上（不能再用它注册新节点），已迁移的节点也不再接受共享 token。新版不会再生成共享 token，全新部署根本没有它。
+2. **systemd / OpenWrt / Windows 节点自动迁移，无需任何操作**：server 升级后节点重连，自更新到新版；新版 agent 用共享 token 连上时，server 把这个节点自己的 token 交给它，agent 存到二进制旁的 `probe-agent.token`（`/var/lib/probe-agent/`、OpenWrt 的 `/usr/bin/`、Windows 的 `C:\ProgramData\probe-agent\`，只有 agent 的运行用户（及 root / 管理员）可读），立刻改用它重连，以后重启也用它。`/etc/probe-agent.env` 里的共享 token 不用改（服务用户也改不了），`probe-agent.token` 里记着它替换的是哪个 token 的哈希，配置里换成别的 token 后这个文件就自动作废。
+3. **Docker / 群晖 / 威联通节点要手动迁移**：容器不自更新，重建容器也会丢掉容器里的文件，所以不做自动交接。在节点列表点该节点的「安装命令」，用 Docker / 群晖 / 威联通那条命令重建容器（同一个节点、同一个 token，覆盖安装）。
+4. 「节点」页顶部的迁移提示会列出还有几个节点标着「共享 token」。全部迁移后点「停用共享 token」：此后只有节点自己的 token 能连接和下载 agent，还在用共享 token 的连接会被立即断开；环境变量里的 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）和 `data/agent_token` 也可以删掉了。停用后仍可在同一位置重新启用。
+5. 迁移过的节点以后重装：用「安装命令」里的新命令即可；就算不小心用旧的共享 token 命令重装，安装脚本也会发现本机已有节点自己的 token 并改用它。
 
 ### 4. 可选：MTR 每跳地区标注
 
@@ -194,8 +218,8 @@ server（flag 或环境变量）：
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `PROBE_LISTEN` | `:8080` | 监听地址 |
-| `PROBE_DATA_DIR` | `./data` | SQLite、token、ip2region 库所在目录 |
-| `PROBE_AGENT_TOKEN` | 自动生成 | agent 共享密钥 |
+| `PROBE_DATA_DIR` | `./data` | SQLite、ip2region 库所在目录 |
+| `PROBE_AGENT_TOKEN` | 空（有 `data/agent_token` 时读取它） | 旧版共享 token，只用于迁移升级前安装的节点（见 3.4），迁移完在「节点」页停用后可删；节点现在各有 token，在「节点」页创建 |
 | `PROBE_ADMIN_USER` / `PROBE_ADMIN_PASSWORD` | `admin` / 空 | 引导用的管理员用户名和密码；之后在「设置」页修改 |
 | `PROBE_GUEST` | `true` | 引导值：允许游客发起拨测、查看结果（「设置」页可改） |
 | `PROBE_LOGTO_ENDPOINT` / `PROBE_LOGTO_APP_ID` / `PROBE_LOGTO_APP_SECRET` / `PROBE_LOGTO_ADMINS` | 空 | 引导值，建议直接在「设置」页配置 |
@@ -210,7 +234,7 @@ server（flag 或环境变量）：
 | `PROBE_AGENTS_DIR` | 空（Docker 镜像内已设） | 存放 `probe-agent-<os>-<arch>` 二进制的目录，用于 agent 自更新与安装脚本下载 |
 | `PROBE_AGENT_IMAGE` | `ghcr.io/lochinemak/probe-agent:latest` | 节点页展示的 Docker 镜像名（大陆可填镜像站地址） |
 
-agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为节点唯一 ID）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）、`PROBE_SELF_UPDATE`（默认 `true`）、`PROBE_ENV_FILE` / `--env-file`（KEY=VALUE 配置文件，优先级低于环境变量与 flag；Windows 服务用它读配置）、`PROBE_LOG_FILE` / `--log-file`（写到日志文件并按 5 MB 轮转，Windows 服务默认写 exe 旁的 `probe-agent.log`）。
+agent：`PROBE_SERVER`、`PROBE_TOKEN`（本节点的 token，决定节点身份；迁移过的节点会优先用二进制旁 `probe-agent.token` 里的 token）、`PROBE_NAME`（显示名，默认主机名）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）、`PROBE_SELF_UPDATE`（默认 `true`）、`PROBE_ENV_FILE` / `--env-file`（KEY=VALUE 配置文件，优先级低于环境变量与 flag；Windows 服务用它读配置）、`PROBE_LOG_FILE` / `--log-file`（写到日志文件并按 5 MB 轮转，Windows 服务默认写 exe 旁的 `probe-agent.log`）。
 
 ## API
 
@@ -233,9 +257,14 @@ curl -N localhost:8080/api/tasks/<id>/events
 curl localhost:8080/api/tasks?limit=20
 curl localhost:8080/api/tasks/<id>
 curl localhost:8080/api/agents
-# server 自带的 agent 二进制（agent token 或登录态均可访问）
-curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/version
-curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/download/linux-arm64 -o probe-agent
+# 节点管理（管理员）：创建节点并拿到 token、查看 / 重置 token、删除（即吊销）
+curl -s -X POST localhost:8080/api/agents -d '{"name":"home-shenzhen","location":"广东 深圳","isp":"电信"}'
+curl -s localhost:8080/api/agents/home-shenzhen/token
+curl -s -X POST localhost:8080/api/agents/home-shenzhen/token
+curl -s -X DELETE localhost:8080/api/agents/home-shenzhen
+# server 自带的 agent 二进制（任一节点 token 或登录态均可访问）
+curl -H "Authorization: Bearer <节点 token>" localhost:8080/api/agent/version
+curl -H "Authorization: Bearer <节点 token>" localhost:8080/api/agent/download/linux-arm64 -o probe-agent
 ```
 
 任务参数（`params`）：
@@ -303,4 +332,5 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 - **agent 自更新只在可信连接上进行。** 更新提供的 SHA-256 和二进制来自同一条连接，只能防传输损坏，防不了恶意服务端；因此 server 地址是明文 http（回环除外）或开了 `PROBE_INSECURE=true` 时，agent 会拒绝自更新——否则路径上的人就能投递一个以 root / LocalSystem 运行的二进制。
 - **通知渠道的密钥只写不读。** Bot token、SMTP 密码、Webhook 认证头等不会通过 API 返回，页面上只显示「已保存」；保存时留空表示不修改。
 - ip-api.com 的免费接口不支持 HTTPS，所以位置识别改成**先查离线库**，只有查不到才走那次明文请求（`PROBE_GEOIP_ONLINE=false` 可完全关闭）。建议用 `make geoip-db` 下好离线库。
-- **所有 agent 目前共用一个 token**（`PROBE_AGENT_TOKEN`）。它只能让持有者以任意名字注册成节点、接收任务、下载 agent 二进制，不能登录 Dashboard 或查看历史。注意节点 ID 就是节点自报的名字，同名连接会顶掉旧连接：**任何持有 token 的人都能冒用其它节点的名字**，接收本该发给它的任务并回传伪造结果，或注册大量假节点。因此只把 token 给你信任的人，或按下面的方式轮换。泄露后轮换：改 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）并重启 server，然后逐台改 `/etc/probe-agent.env`（或容器环境变量）再重启 agent；自更新机制不负责分发 token。若节点分散在多个不完全信任的地方，可以考虑改为每节点独立 token 并在 Dashboard 上签发 / 吊销，目前尚未实现。
+- **每个节点一个 token，服务端按 token 认节点。** 节点自报的名字只是显示名，所以一台机器的 token 泄露，最多让人冒充**这一个**节点（接收发给它的任务、回传伪造结果），冒充不了别的节点，也注册不了新节点。token 不能登录 Dashboard 或查看历史。泄露或机器易手后在「节点」页「重置 token」或删除节点，旧 token 立即失效、在线连接立即断开，不用动 server 和其它节点。token 以明文存在 server 的数据库里（这样才能随时再显示安装命令），和会话密钥一样，保护好 `data/` 目录。
+- **旧版共享 token 只在迁移期有效**（见 3.4）：它只对升级前就存在、尚未迁移的节点有效，迁移期间持有它的人仍能冒充这些节点并拿到它们的 token，所以迁移完请尽快在「节点」页停用。

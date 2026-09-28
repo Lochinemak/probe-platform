@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,8 +38,11 @@ CREATE TABLE IF NOT EXISTS agents (
 	geo_isp       TEXT NOT NULL DEFAULT '',
 	capabilities  TEXT NOT NULL DEFAULT '[]',
 	first_seen    INTEGER NOT NULL,
-	last_seen     INTEGER NOT NULL
+	last_seen     INTEGER NOT NULL,
+	token         TEXT NOT NULL DEFAULT '',
+	auth          TEXT NOT NULL DEFAULT ''
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_token ON agents(token) WHERE token != '';
 CREATE TABLE IF NOT EXISTS tasks (
 	id         TEXT PRIMARY KEY,
 	type       TEXT NOT NULL,
@@ -89,11 +94,26 @@ func (s *Store) migrate() error {
 	// Columns added to tasks over time. The CREATE TABLE above already has
 	// them for fresh databases; older files get them via ALTER TABLE, which
 	// has to happen before the schema's indexes reference them.
-	if err := s.ensureColumn("tasks", "monitor_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := s.ensureColumn("tasks", "monitor_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
-	if err := s.ensureColumn("tasks", "owner", `TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := s.ensureColumn("tasks", "owner", `TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
+	}
+	// Per-node tokens. Every node recorded before them connected with the
+	// shared token, so it is marked legacy: that is what lets it keep using
+	// the shared token until it has been migrated.
+	if _, err := s.ensureColumn("agents", "token", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	added, err := s.ensureColumn("agents", "auth", `TEXT NOT NULL DEFAULT ''`)
+	if err != nil {
+		return err
+	}
+	if added {
+		if _, err := s.db.Exec(`UPDATE agents SET auth='legacy'`); err != nil {
+			return err
+		}
 	}
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -104,18 +124,19 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// ensureColumn adds column to table when the table exists without it.
-func (s *Store) ensureColumn(table, column, ddl string) error {
+// ensureColumn adds column to table when the table exists without it and
+// reports whether it did.
+func (s *Store) ensureColumn(table, column, ddl string) (bool, error) {
 	var exists int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
-		return err
+		return false, err
 	}
 	if exists == 0 {
-		return nil // CREATE TABLE will include it
+		return false, nil // CREATE TABLE will include it
 	}
 	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -124,17 +145,20 @@ func (s *Store) ensureColumn(table, column, ddl string) error {
 		var notnull, pk int
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return err
+			return false, err
 		}
 		if name == column {
-			return nil
+			return false, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return false, err
 	}
-	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + ddl)
-	return err
+	rows.Close()
+	if _, err := s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + ddl); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Close closes the database.
@@ -165,7 +189,9 @@ func jsonStr(v any) string {
 // --- agents -----------------------------------------------------------------
 
 // UpsertAgent inserts or updates an agent record. FirstSeen is preserved on
-// update; LastSeen is set to a.LastSeen (or now).
+// update (unless the node was created on the dashboard and is connecting for
+// the first time); LastSeen is set to a.LastSeen (or now). The token is never
+// touched here.
 func (s *Store) UpsertAgent(a *protocol.AgentStatus) error {
 	now := time.Now()
 	if a.LastSeen.IsZero() {
@@ -175,17 +201,88 @@ func (s *Store) UpsertAgent(a *protocol.AgentStatus) error {
 		a.FirstSeen = now
 	}
 	_, err := s.db.Exec(`
-INSERT INTO agents (id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO agents (id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen,auth)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
 	name=excluded.name, location=excluded.location, isp=excluded.isp, tags=excluded.tags,
 	os=excluded.os, arch=excluded.arch, version=excluded.version, public_ip=excluded.public_ip,
 	geo_location=CASE WHEN excluded.geo_location='' THEN agents.geo_location ELSE excluded.geo_location END,
 	geo_isp=CASE WHEN excluded.geo_isp='' THEN agents.geo_isp ELSE excluded.geo_isp END,
-	capabilities=excluded.capabilities, last_seen=excluded.last_seen`,
+	capabilities=excluded.capabilities, last_seen=excluded.last_seen,
+	first_seen=CASE WHEN agents.first_seen=0 THEN excluded.first_seen ELSE agents.first_seen END,
+	auth=CASE WHEN excluded.auth='' THEN agents.auth ELSE excluded.auth END`,
 		a.ID, a.Name, a.Location, a.ISP, jsonStr(nonNil(a.Tags)), a.OS, a.Arch, a.Version, a.PublicIP,
-		a.GeoLocation, a.GeoISP, jsonStr(nonNil(a.Capabilities)), unixMs(a.FirstSeen), unixMs(a.LastSeen))
+		a.GeoLocation, a.GeoISP, jsonStr(nonNil(a.Capabilities)), unixMs(a.FirstSeen), unixMs(a.LastSeen), a.Auth)
 	return err
+}
+
+// ErrAgentExists is returned by CreateAgent when the id is taken.
+var ErrAgentExists = errors.New("agent exists")
+
+// CreateAgent records a node created on the dashboard before it has ever
+// connected, together with its token.
+func (s *Store) CreateAgent(a *protocol.AgentStatus, token string) error {
+	res, err := s.db.Exec(`
+INSERT INTO agents (id,name,location,isp,first_seen,last_seen,token,auth) VALUES (?,?,?,?,0,0,?,'')
+ON CONFLICT(id) DO NOTHING`, a.ID, a.Name, a.Location, a.ISP, token)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrAgentExists
+	}
+	return nil
+}
+
+// AgentByToken returns the node that owns token, or ErrNotFound.
+func (s *Store) AgentByToken(token string) (*protocol.AgentStatus, error) {
+	if token == "" {
+		return nil, ErrNotFound
+	}
+	a, err := scanAgent(s.db.QueryRow(`SELECT `+agentCols+` FROM agents WHERE token=?`, token))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return a, err
+}
+
+// AgentToken returns a node's token, generating one first if the node has
+// none yet (nodes that predate per-node tokens).
+func (s *Store) AgentToken(id string) (string, error) {
+	var tok string
+	err := s.db.QueryRow(`SELECT token FROM agents WHERE id=?`, id).Scan(&tok)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil || tok != "" {
+		return tok, err
+	}
+	tok = newAgentToken()
+	// Only fill an empty token: a concurrent caller may have just set one.
+	if _, err := s.db.Exec(`UPDATE agents SET token=? WHERE id=? AND token=''`, tok, id); err != nil {
+		return "", err
+	}
+	err = s.db.QueryRow(`SELECT token FROM agents WHERE id=?`, id).Scan(&tok)
+	return tok, err
+}
+
+// ResetAgentToken replaces a node's token; the old one stops working at once.
+func (s *Store) ResetAgentToken(id string) (string, error) {
+	tok := newAgentToken()
+	res, err := s.db.Exec(`UPDATE agents SET token=? WHERE id=?`, tok, id)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return tok, nil
+}
+
+func newAgentToken() string {
+	var b [24]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 func nonNil(s []string) []string {
@@ -195,20 +292,26 @@ func nonNil(s []string) []string {
 	return s
 }
 
+// SetAgentGeo stores the location looked up from a node's public IP.
+func (s *Store) SetAgentGeo(id, location, isp string) error {
+	_, err := s.db.Exec(`UPDATE agents SET geo_location=?, geo_isp=? WHERE id=?`, location, isp, id)
+	return err
+}
+
 // TouchAgent updates last_seen.
 func (s *Store) TouchAgent(id string, t time.Time) error {
 	_, err := s.db.Exec(`UPDATE agents SET last_seen=? WHERE id=?`, unixMs(t), id)
 	return err
 }
 
-const agentCols = `id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen`
+const agentCols = `id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen,auth`
 
 func scanAgent(row interface{ Scan(...any) error }) (*protocol.AgentStatus, error) {
 	var a protocol.AgentStatus
 	var tags, caps string
 	var first, last int64
 	if err := row.Scan(&a.ID, &a.Name, &a.Location, &a.ISP, &tags, &a.OS, &a.Arch, &a.Version, &a.PublicIP,
-		&a.GeoLocation, &a.GeoISP, &caps, &first, &last); err != nil {
+		&a.GeoLocation, &a.GeoISP, &caps, &first, &last, &a.Auth); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(tags), &a.Tags)

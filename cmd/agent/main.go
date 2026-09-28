@@ -72,7 +72,7 @@ func main() {
 
 	fs := flag.NewFlagSet("probe-agent", flag.ExitOnError)
 	server := fs.String("server", envOr("PROBE_SERVER", ""), "server URL, e.g. https://probe.example.com")
-	token := fs.String("token", envOr("PROBE_TOKEN", ""), "agent token shared with the server")
+	token := fs.String("token", envOr("PROBE_TOKEN", ""), "this node's token (dashboard: 节点 → 接入新节点 / 安装命令)")
 	name := fs.String("name", envOr("PROBE_NAME", ""), "agent name (unique per agent; default hostname)")
 	location := fs.String("location", envOr("PROBE_LOCATION", ""), "human label for where this agent is, e.g. \"广东 深圳\"")
 	isp := fs.String("isp", envOr("PROBE_ISP", ""), "human label for the ISP, e.g. \"电信\"")
@@ -108,6 +108,13 @@ func main() {
 			tagList = append(tagList, t)
 		}
 	}
+	// Only an installed, self-updating agent owns a directory that survives a
+	// restart; a container (self-update off) would lose a handed-over token on
+	// recreation and come back with the shared one, which is then refused.
+	tokenFile := ""
+	if *selfUpdate {
+		tokenFile = agent.DefaultTokenFile()
+	}
 	cli, err := agent.New(agent.Config{
 		Server:         *server,
 		Token:          *token,
@@ -120,6 +127,7 @@ func main() {
 		Version:        buildinfo.Version,
 		Variant:        buildinfo.Variant,
 		SelfUpdate:     *selfUpdate,
+		TokenFile:      tokenFile,
 	}, log)
 	if err != nil {
 		log.Error("invalid configuration", "err", err)

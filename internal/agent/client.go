@@ -38,6 +38,10 @@ type Config struct {
 	Version        string
 	Variant        string // CPU variant for arm builds ("v7"), from buildinfo
 	SelfUpdate     bool   // act on update offers from the server
+	// TokenFile is where a node token handed over by the server is kept (see
+	// token.go). Empty disables the handover, e.g. in a container whose
+	// filesystem does not survive recreation.
+	TokenFile string
 }
 
 // Client is a running agent.
@@ -46,6 +50,9 @@ type Client struct {
 	log      *slog.Logger
 	caps     []string
 	httpBase string // http(s)://host[/prefix] derived from the WebSocket URL
+
+	tokenMu sync.Mutex
+	token   string // what we authenticate with: cfg.Token or the node token handed over for it
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
@@ -100,14 +107,47 @@ func New(cfg Config, log *slog.Logger) (*Client, error) {
 	if cfg.Version == "" {
 		cfg.Version = "dev"
 	}
+	token := cfg.Token
+	if t := loadIssuedToken(cfg.TokenFile, cfg.Token); t != "" {
+		log.Info("using this node's own token handed over by the server instead of the configured shared token", "file", cfg.TokenFile)
+		token = t
+	}
 	return &Client{
 		cfg:      cfg,
 		log:      log,
 		caps:     probe.DetectCapabilities(),
 		httpBase: httpBase,
+		token:    token,
 		running:  map[string]context.CancelFunc{},
 		sem:      make(chan struct{}, cfg.MaxConcurrency),
 	}, nil
+}
+
+func (c *Client) authToken() string {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	return c.token
+}
+
+// adoptToken stores a node token the server handed over and switches to it.
+// It only switches once the token is safely on disk: an agent that forgot it
+// on restart would come back with the shared token, which the server no
+// longer accepts for a node that has used its own.
+func (c *Client) adoptToken(issued string) bool {
+	current := c.authToken()
+	if issued == "" || issued == current || c.cfg.TokenFile == "" {
+		return false
+	}
+	if err := saveIssuedToken(c.cfg.TokenFile, current, issued); err != nil {
+		c.log.Warn("server handed over this node's own token but it cannot be saved; staying on the shared token",
+			"file", c.cfg.TokenFile, "err", err, "fix", "reinstall with the node's command from the dashboard (节点 → 安装命令)")
+		return false
+	}
+	c.tokenMu.Lock()
+	c.token = issued
+	c.tokenMu.Unlock()
+	c.log.Info("saved this node's own token handed over by the server; the shared token is no longer needed", "file", c.cfg.TokenFile)
+	return true
 }
 
 // Capabilities reports what this agent detected it can do.
@@ -124,6 +164,10 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 		if time.Since(start) > time.Minute {
 			backoff = time.Second
+		}
+		if errors.Is(err, errTokenSwitched) {
+			backoff = time.Second
+			continue
 		}
 		c.log.Warn("disconnected from server", "err", err, "retry_in", backoff)
 		select {
@@ -144,9 +188,12 @@ func (c *Client) session(ctx context.Context) error {
 		Proxy:            http.ProxyFromEnvironment,
 		TLSClientConfig:  &tls.Config{InsecureSkipVerify: c.cfg.InsecureTLS}, //nolint:gosec // explicit operator opt-in
 	}
-	hdr := http.Header{"Authorization": {"Bearer " + c.cfg.Token}}
+	hdr := http.Header{"Authorization": {"Bearer " + c.authToken()}}
 	conn, resp, err := dialer.DialContext(ctx, c.cfg.Server, hdr)
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("dial %s: token rejected (http 401): the node was deleted, its token was reset, or PROBE_TOKEN is wrong; reinstall with the node's command from the dashboard", c.cfg.Server)
+		}
 		if resp != nil {
 			return fmt.Errorf("dial %s: %w (http %d)", c.cfg.Server, err, resp.StatusCode)
 		}
@@ -169,6 +216,7 @@ func (c *Client) session(ctx context.Context) error {
 		MaxConcurrency: c.cfg.MaxConcurrency,
 		Variant:        c.cfg.Variant,
 		SelfUpdate:     c.cfg.SelfUpdate,
+		TokenHandoff:   c.cfg.TokenFile != "",
 	})
 	if err != nil {
 		return err
@@ -187,6 +235,10 @@ func (c *Client) session(ctx context.Context) error {
 	}
 	var welcome protocol.Welcome
 	_ = json.Unmarshal(first.Payload, &welcome)
+	if c.adoptToken(welcome.Token) {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "token switched"), time.Now().Add(2*time.Second))
+		return errTokenSwitched
+	}
 	c.log.Info("connected", "server", c.cfg.Server, "agent_id", welcome.AgentID, "public_ip", welcome.PublicIP, "caps", strings.Join(c.caps, ","))
 
 	sessCtx, cancel := context.WithCancel(ctx)

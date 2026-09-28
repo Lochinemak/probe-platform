@@ -217,7 +217,7 @@ func TestAPIAuthGate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("guest agents: %d", resp.StatusCode)
 	}
-	for _, p := range []string{"/api/monitors", "/api/notify", "/api/agent/token", "/api/alerts"} {
+	for _, p := range []string{"/api/monitors", "/api/notify", "/api/agents/a1/token", "/api/alerts"} {
 		if resp, _ := http.Get(srv.URL + p); resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("guest must not access %s: %d", p, resp.StatusCode)
 		}

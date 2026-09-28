@@ -41,6 +41,7 @@ type API struct {
 // NewHandler wires every route.
 func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Settings, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
 	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(settings), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, settings: settings}
+	hub.SetLegacyToken(settings.LegacyAgentToken)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/agent", hub.HandleAgentWS)
 	mux.HandleFunc("GET /api/health", a.health)
@@ -51,7 +52,10 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.HandleFunc("GET /api/auth/logto/callback", a.logtoCallback)
 	// Guests (when enabled) may probe and read results; node details are trimmed.
 	mux.Handle("GET /api/agents", a.protectGuest(a.listAgents))
+	mux.Handle("POST /api/agents", a.protect(a.createAgent))
 	mux.Handle("DELETE /api/agents/{id}", a.protect(a.deleteAgent))
+	mux.Handle("GET /api/agents/{id}/token", a.protect(a.agentToken))
+	mux.Handle("POST /api/agents/{id}/token", a.protect(a.resetAgentToken))
 	mux.Handle("GET /api/tasks", a.protectGuest(a.listTasks))
 	mux.Handle("POST /api/tasks", a.protectGuest(a.createTask))
 	mux.Handle("GET /api/tasks/{id}", a.protectGuest(a.getTask))
@@ -75,7 +79,6 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("PUT /api/settings", a.protect(a.updateSettings))
 	mux.Handle("POST /api/settings/password", a.protect(a.changePassword))
 	mux.Handle("POST /api/settings/logto/test", a.protect(a.testLogto))
-	mux.Handle("GET /api/agent/token", a.protect(a.agentToken))
 	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
 	mux.HandleFunc("GET /install-agent.sh", a.installScript)
@@ -239,19 +242,11 @@ func publicAgent(ag *protocol.AgentStatus) *protocol.AgentStatus {
 	return &protocol.AgentStatus{ID: ag.ID, Name: ag.Name, Online: ag.Online, Location: loc, ISP: isp, Capabilities: ag.Capabilities, Running: ag.Running}
 }
 
-// hasAgentToken accepts the shared agent secret as a bearer token.
-func (a *API) hasAgentToken(r *http.Request) bool {
-	h := r.Header.Get("Authorization")
-	if !strings.HasPrefix(h, "Bearer ") || a.cfg.AgentToken == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, "Bearer ")), []byte(a.cfg.AgentToken)) == 1
-}
-
-// protectAgentOrSession allows either a logged-in dashboard user or an agent.
+// protectAgentOrSession allows either a logged-in dashboard user or an agent
+// (any node token, or the legacy shared token while it is enabled).
 func (a *API) protectAgentOrSession(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.hasAgentToken(r) && !a.auth.isAdmin(r) {
+		if !a.hub.checkToken(r) && !a.auth.isAdmin(r) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -261,10 +256,75 @@ func (a *API) protectAgentOrSession(next http.HandlerFunc) http.Handler {
 
 var agentKeyRe = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`)
 
-// agentToken reveals the shared agent secret to a logged-in dashboard user so
-// the onboarding snippets can be copied ready to run.
-func (a *API) agentToken(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"token": a.cfg.AgentToken})
+// createAgent registers a node on the dashboard and returns its token, which
+// goes into the install command. The node's id comes from the name and never
+// changes; the token is its identity.
+func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     string `json:"name"`
+		Location string `json:"location"`
+		ISP      string `json:"isp"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if len(name) > 64 {
+		writeErr(w, http.StatusBadRequest, "节点名最长 64 字节（约 21 个汉字）")
+		return
+	}
+	id := agentIDFromName(name)
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "节点名不能为空")
+		return
+	}
+	node := &protocol.AgentStatus{ID: id, Name: name, Location: strings.TrimSpace(body.Location), ISP: strings.TrimSpace(body.ISP)}
+	token := newAgentToken()
+	if err := a.store.CreateAgent(node, token); errors.Is(err, ErrAgentExists) {
+		writeErr(w, http.StatusConflict, "已有同名节点（ID "+id+"）：换个名字，或在节点列表里打开它的「安装命令」覆盖安装")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.log.Info("node created", "agent", id, "by", a.cfg.ClientIP(r))
+	writeJSON(w, http.StatusCreated, map[string]any{"agent": node, "token": token})
+}
+
+// agentToken reveals a node's token to the admin so its install command can
+// be shown again (reinstalling with the same token replaces the install in
+// place). Nodes from before per-node tokens get one on first request.
+func (a *API) agentToken(w http.ResponseWriter, r *http.Request) {
+	tok, err := a.store.AgentToken(r.PathValue("id"))
+	if errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+}
+
+// resetAgentToken issues a new token for a node. The old one stops working at
+// once and a connected agent is dropped until it is reinstalled with the new
+// command.
+func (a *API) resetAgentToken(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tok, err := a.store.ResetAgentToken(id)
+	if errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.hub.Kick(id)
+	a.log.Info("node token reset", "agent", id, "by", a.cfg.ClientIP(r))
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
 // agentVersion lists the agent binaries bundled with this server.
@@ -406,6 +466,9 @@ func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if p.LegacyAgentToken != nil && !*p.LegacyAgentToken {
+		a.hub.KickLegacy()
+	}
 	// Enabling the first login method from open mode would otherwise turn the
 	// person doing it into a guest mid-setup; keep them signed in as admin.
 	if wasOpen && a.auth.enabled() && a.auth.sessionFrom(r) == nil {
@@ -520,18 +583,28 @@ func (a *API) listAgents(w http.ResponseWriter, r *http.Request) {
 	if a.auth.role(r) != roleAdmin {
 		trimmed := make([]*protocol.AgentStatus, 0, len(agents))
 		for _, ag := range agents {
+			if ag.Auth == "" && !ag.Online {
+				continue // created on the dashboard but never connected
+			}
 			trimmed = append(trimmed, publicAgent(ag))
 		}
-		agents = trimmed
+		writeJSON(w, http.StatusOK, map[string]any{"agents": trimmed})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+	// legacy_token: "none" | "enabled" | "disabled", for the migration notice.
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents, "legacy_token": a.settings.LegacyTokenState()})
 }
 
 func (a *API) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	if err := a.hub.RemoveAgent(r.PathValue("id")); err != nil {
-		writeErr(w, http.StatusConflict, err.Error())
+	id := r.PathValue("id")
+	if err := a.hub.RemoveAgent(id); errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "node not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.log.Info("node deleted", "agent", id, "by", a.cfg.ClientIP(r))
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

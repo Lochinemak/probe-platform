@@ -1,6 +1,9 @@
-# Server + a local agent on the same host (e.g. your Tencent Cloud VM).
+# Server + an optional local agent on the same host (e.g. your Tencent Cloud VM).
 # 1) cp deploy/.env.example deploy/.env && edit
-# 2) docker compose -f deploy/docker-compose.yml up -d
+# 2) docker compose -f deploy/docker-compose.yml up -d          # server only
+# 3) Every node has its own token: on the dashboard 节点 → 接入新节点, create the
+#    local node, put its token into deploy/.env as LOCAL_AGENT_TOKEN, then
+#    docker compose -f deploy/docker-compose.yml --profile local-agent up -d
 services:
   server:
     build:
@@ -11,7 +14,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      PROBE_AGENT_TOKEN: ${PROBE_AGENT_TOKEN:?set PROBE_AGENT_TOKEN in deploy/.env}
+      # Old shared token, only while upgrading an install from before per-node tokens.
+      PROBE_AGENT_TOKEN: ${PROBE_AGENT_TOKEN:-}
       PROBE_ADMIN_PASSWORD: ${PROBE_ADMIN_PASSWORD:-}
       PROBE_TRUST_PROXY: ${PROBE_TRUST_PROXY:-false}
       PROBE_GEOIP_ONLINE: ${PROBE_GEOIP_ONLINE:-true}
@@ -20,6 +24,7 @@ services:
       - probe-data:/data
 
   agent:
+    profiles: [local-agent]
     build:
       context: ..
       dockerfile: deploy/Dockerfile.agent
@@ -29,7 +34,7 @@ services:
     cap_add: [NET_RAW]          # raw ICMP for ping + mtr
     environment:
       PROBE_SERVER: http://127.0.0.1:8080
-      PROBE_TOKEN: ${PROBE_AGENT_TOKEN}
+      PROBE_TOKEN: ${LOCAL_AGENT_TOKEN:-}   # this node's own token (dashboard 节点 → 接入新节点)
       PROBE_NAME: ${LOCAL_AGENT_NAME:-server-local}
       PROBE_LOCATION: ${LOCAL_AGENT_LOCATION:-}
       PROBE_ISP: ${LOCAL_AGENT_ISP:-}

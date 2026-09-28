@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"probe-platform/internal/protocol"
 )
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -121,8 +123,15 @@ func TestAgentDownloadAPI(t *testing.T) {
 	if r := get("/api/agent/download/../etc", "tok"); r.StatusCode == 200 {
 		t.Fatal("path traversal must not serve")
 	}
+	// A node's own token works for the same endpoints as the shared one.
+	if err := st.CreateAgent(&protocol.AgentStatus{ID: "n1", Name: "n1"}, "nodetok"); err != nil {
+		t.Fatal(err)
+	}
+	if r := get("/api/agent/download/linux-amd64", "nodetok"); r.StatusCode != 200 {
+		t.Fatalf("download with node token: %d", r.StatusCode)
+	}
 	// The token endpoint is for dashboard sessions only, never for agents.
-	if r := get("/api/agent/token", "tok"); r.StatusCode != 401 {
+	if r := get("/api/agents/n1/token", "nodetok"); r.StatusCode != 401 {
 		t.Fatalf("token with agent bearer: %d", r.StatusCode)
 	}
 	jar, _ := cookiejar.New(nil)
@@ -130,10 +139,10 @@ func TestAgentDownloadAPI(t *testing.T) {
 	if resp, err := sess.Post(srv.URL+"/api/login", "application/json", strings.NewReader(`{"username":"admin","password":"pw"}`)); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("login: %v %v", err, resp)
 	}
-	resp, _ := sess.Get(srv.URL + "/api/agent/token")
+	resp, _ := sess.Get(srv.URL + "/api/agents/n1/token")
 	var tk map[string]string
 	_ = json.NewDecoder(resp.Body).Decode(&tk)
-	if resp.StatusCode != 200 || tk["token"] != "tok" {
+	if resp.StatusCode != 200 || tk["token"] != "nodetok" {
 		t.Fatalf("token via session: %d %v", resp.StatusCode, tk)
 	}
 

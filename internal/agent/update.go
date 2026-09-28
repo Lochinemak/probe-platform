@@ -163,7 +163,7 @@ func (c *Client) download(ctx context.Context, u protocol.Update, w io.Writer) e
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	req.Header.Set("Authorization", "Bearer "+c.authToken())
 	client := &http.Client{
 		Timeout: 15 * time.Minute,
 		Transport: &http.Transport{

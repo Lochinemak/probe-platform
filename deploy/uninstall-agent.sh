@@ -2,8 +2,9 @@
 # Uninstall probe-agent from a Linux host (systemd) or an OpenWrt / iStoreOS
 # router (procd). Whatever install-agent.sh / install-agent-openwrt.sh put on
 # the box is detected and removed: the service, the binary (plus self-update
-# leftovers), /etc/probe-agent.env and the probe-agent system user. Running it
-# on a host that has no agent is harmless, and so is running it twice.
+# leftovers and the probe-agent.token a migrated node keeps next to it),
+# /etc/probe-agent.env and the probe-agent system user. Running it on a host
+# that has no agent is harmless, and so is running it twice.
 #
 #   Linux:    curl -fsSL https://probe.example.com/uninstall-agent.sh | sudo sh
 #   OpenWrt:  curl -fsSL https://probe.example.com/uninstall-agent.sh | sh
@@ -12,8 +13,11 @@
 #             curl -fsSL https://probe.example.com/uninstall-agent.sh | sudo sh -s -- --keep-config --keep-user
 #
 # Docker nodes are not touched: `docker rm -f probe-agent` (NAS: delete the
-# project in Container Manager / Container Station). The node keeps showing as
-# offline on the dashboard until you delete it on the Agents page.
+# project in Container Manager / Container Station).
+#
+# This only cleans the machine. The node's token stays valid and the node stays
+# listed (offline) on the dashboard: delete it on the Agents page to revoke the
+# token, or keep it and reinstall later with the same command (same token).
 set -eu
 
 SVC=probe-agent
@@ -26,7 +30,7 @@ KEEP_USER="${KEEP_USER:-0}"
 usage() {
   cat <<'EOF'
 usage: uninstall-agent.sh [--keep-config] [--keep-user]
-  --keep-config   keep /etc/probe-agent.env (a later install-agent.sh run overwrites it anyway)
+  --keep-config   keep /etc/probe-agent.env, with the node's own token in it (a later install overwrites it anyway)
   --keep-user     keep the probe-agent system user and group
 KEEP_CONFIG=1 / KEEP_USER=1 in the environment do the same.
 EOF
@@ -77,6 +81,21 @@ if command -v pkill >/dev/null 2>&1; then
   fi
 fi
 
+# --- a node migrated off the shared token keeps its own token next to the binary.
+#     With --keep-config, fold it into the kept env file so that file stays usable. ---
+for tf in "$BIN_DIR/probe-agent.token" /usr/bin/probe-agent.token; do
+  [ -f "$tf" ] || continue
+  if [ "$KEEP_CONFIG" = 1 ] && [ -f "$ENV_FILE" ] && command -v sha256sum >/dev/null 2>&1; then
+    own=$(sed -n 's/^PROBE_TOKEN=//p' "$tf" | head -n1)
+    replaces=$(sed -n 's/^REPLACES_SHA256=//p' "$tf" | head -n1)
+    cur=$(sed -n 's/^PROBE_TOKEN=//p' "$ENV_FILE" | head -n1)
+    if [ -n "$own" ] && [ "$(printf %s "$cur" | sha256sum | cut -d' ' -f1)" = "$replaces" ]; then
+      sed -i "s/^PROBE_TOKEN=.*/PROBE_TOKEN=$own/" "$ENV_FILE" && echo "  - moved the node's own token into $ENV_FILE"
+    fi
+  fi
+  rm -f "$tf" "$tf.tmp"; note "removed $tf"
+done
+
 # --- binary, self-update leftovers (.prev, .probe-agent-update-*), legacy locations ---
 if [ -L "$BIN_DIR" ] || [ -d "$BIN_DIR" ]; then rm -rf "$BIN_DIR"; note "removed $BIN_DIR"; fi
 if [ -d /var/lib/private/$SVC ]; then rm -rf /var/lib/private/$SVC; note "removed /var/lib/private/$SVC (legacy DynamicUser layout)"; fi
@@ -110,4 +129,5 @@ if [ "$removed" = 0 ]; then
 else
   echo "probe-agent uninstalled."
 fi
-echo "the node stays listed (offline) on the dashboard until you delete it on the Agents page."
+echo "the node stays listed (offline) on the dashboard and its token stays valid:"
+echo "delete the node on the Agents page to revoke it, or reinstall later with the node's same command."

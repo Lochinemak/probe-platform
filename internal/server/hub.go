@@ -40,6 +40,9 @@ type Hub struct {
 	// taskDone is invoked (in its own goroutine) once every agent of a task
 	// has reached a terminal state. Set by the scheduler.
 	taskDone func(protocol.Task, []*protocol.AgentResult)
+	// legacyToken returns the old shared agent token while it is still
+	// accepted, "" otherwise. Set by NewHandler from Settings.
+	legacyToken func() string
 
 	mu     sync.RWMutex
 	agents map[string]*agentConn
@@ -86,6 +89,7 @@ func (h *Hub) notifyDone(tr *taskRun) {
 
 type agentConn struct {
 	id          string
+	legacy      bool // authenticated with the shared token
 	conn        *websocket.Conn
 	send        chan protocol.Message
 	done        chan struct{}
@@ -186,24 +190,64 @@ func agentIDFromName(name string) string {
 	return id
 }
 
-// checkToken accepts the shared agent secret as a bearer token. The token is
-// deliberately not read from the query string: that would put it in every
-// reverse-proxy access log.
-func (h *Hub) checkToken(r *http.Request) bool {
-	if h.cfg.AgentToken == "" {
-		return false
-	}
+// SetLegacyToken tells the hub where to read the old shared agent token from.
+// fn returns "" when there is none or it has been switched off.
+func (h *Hub) SetLegacyToken(fn func() string) { h.legacyToken = fn }
+
+// agentAuth is who a request authenticated as.
+type agentAuth struct {
+	node   *protocol.AgentStatus // the node owning the token; nil for the shared token
+	legacy bool                  // authenticated with the old shared token
+}
+
+// authenticate accepts a node's own token, or the legacy shared token while
+// that is still enabled. The token is deliberately not read from the query
+// string: that would put it in every reverse-proxy access log.
+func (h *Hub) authenticate(r *http.Request) (agentAuth, bool) {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
-		return false
+		return agentAuth{}, false
 	}
-	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, "Bearer ")), []byte(h.cfg.AgentToken)) == 1
+	tok := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	if tok == "" {
+		return agentAuth{}, false
+	}
+	if node, err := h.store.AgentByToken(tok); err == nil {
+		return agentAuth{node: node}, true
+	} else if !errors.Is(err, ErrNotFound) {
+		h.log.Error("agent token lookup", "err", err)
+		return agentAuth{}, false
+	}
+	if h.legacyToken != nil {
+		if lt := h.legacyToken(); lt != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(lt)) == 1 {
+			return agentAuth{legacy: true}, true
+		}
+	}
+	return agentAuth{}, false
+}
+
+// checkToken reports whether r carries a token an agent may use.
+func (h *Hub) checkToken(r *http.Request) bool {
+	_, ok := h.authenticate(r)
+	return ok
+}
+
+func rejectAgent(conn *websocket.Conn, reason string) {
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason), time.Now().Add(time.Second))
+	conn.Close()
 }
 
 // HandleAgentWS is the WebSocket endpoint agents connect to.
+//
+// A node is identified by its token; the name it reports is only a label. A
+// connection with the legacy shared token is identified by name as before, but
+// only for nodes that already existed before per-node tokens and have not
+// switched to their own token yet. Such an agent is handed its own token in
+// the welcome if it knows how to store it.
 func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
-	if !h.checkToken(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	auth, ok := h.authenticate(r)
+	if !ok {
+		http.Error(w, "unauthorized: unknown or revoked node token", http.StatusUnauthorized)
 		return
 	}
 	conn, err := h.upgrader.Upgrade(w, r, nil)
@@ -215,8 +259,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	var first protocol.Message
 	if err := conn.ReadJSON(&first); err != nil || first.Type != protocol.MsgHello {
-		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "expected hello"), time.Now().Add(time.Second))
-		conn.Close()
+		rejectAgent(conn, "expected hello")
 		return
 	}
 	var hello protocol.Hello
@@ -224,30 +267,54 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	id := agentIDFromName(hello.Name)
-	if id == "" {
-		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "empty agent name"), time.Now().Add(time.Second))
-		conn.Close()
-		return
+
+	node := auth.node
+	if auth.legacy {
+		id := agentIDFromName(hello.Name)
+		if id == "" {
+			rejectAgent(conn, "empty agent name")
+			return
+		}
+		prev, err := h.store.GetAgent(id)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			h.log.Warn("shared token used by an unknown node; rejected", "name", hello.Name, "ip", remoteIP)
+			rejectAgent(conn, "the shared token only works for existing nodes: create this node on the dashboard and install it with its own token")
+			return
+		case err != nil:
+			h.log.Error("load agent", "err", err)
+			rejectAgent(conn, "server error")
+			return
+		case prev.Auth != "legacy":
+			h.log.Warn("shared token used for a node that has its own token; rejected", "agent", id, "ip", remoteIP)
+			rejectAgent(conn, "this node has its own token now: reinstall it with the command from the dashboard")
+			return
+		}
+		node = prev
 	}
+	id := node.ID
 
 	now := time.Now()
 	ac := &agentConn{
 		id:          id,
+		legacy:      auth.legacy,
 		conn:        conn,
 		send:        make(chan protocol.Message, 256),
 		done:        make(chan struct{}),
 		connectedAt: now,
 		status: protocol.AgentStatus{
-			ID: id, Name: hello.Name, Location: hello.Location, ISP: hello.ISP, Tags: hello.Tags,
+			ID: id, Name: firstNonEmpty(hello.Name, node.Name), Location: firstNonEmpty(hello.Location, node.Location),
+			ISP: firstNonEmpty(hello.ISP, node.ISP), Tags: hello.Tags,
 			OS: hello.OS, Arch: hello.Arch, Version: hello.Version, PublicIP: remoteIP,
 			Capabilities: hello.Capabilities, LastSeen: now,
+			FirstSeen: node.FirstSeen, GeoLocation: node.GeoLocation, GeoISP: node.GeoISP,
+			Auth: "token",
 		},
 	}
-	if prev, err := h.store.GetAgent(id); err == nil {
-		ac.status.FirstSeen = prev.FirstSeen
-		ac.status.GeoLocation, ac.status.GeoISP = prev.GeoLocation, prev.GeoISP
-	} else {
+	if auth.legacy {
+		ac.status.Auth = "legacy"
+	}
+	if ac.status.FirstSeen.IsZero() {
 		ac.status.FirstSeen = now
 	}
 	if err := h.store.UpsertAgent(&ac.status); err != nil {
@@ -262,9 +329,18 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		h.log.Info("agent reconnected, replacing previous connection", "agent", id)
 		old.close()
 	}
-	h.log.Info("agent connected", "agent", id, "ip", remoteIP, "arch", hello.Arch, "version", hello.Version, "caps", strings.Join(hello.Capabilities, ","))
+	h.log.Info("agent connected", "agent", id, "ip", remoteIP, "arch", hello.Arch, "version", hello.Version, "auth", ac.status.Auth, "caps", strings.Join(hello.Capabilities, ","))
 
-	welcome, _ := protocol.NewMessage(protocol.MsgWelcome, protocol.Welcome{AgentID: id, PublicIP: remoteIP, ServerTime: now.UnixMilli()})
+	wel := protocol.Welcome{AgentID: id, PublicIP: remoteIP, ServerTime: now.UnixMilli()}
+	if auth.legacy && hello.TokenHandoff {
+		if tok, err := h.store.AgentToken(id); err != nil {
+			h.log.Error("agent token", "agent", id, "err", err)
+		} else {
+			wel.Token = tok
+			h.log.Info("handing the node its own token", "agent", id)
+		}
+	}
+	welcome, _ := protocol.NewMessage(protocol.MsgWelcome, wel)
 	_ = conn.SetWriteDeadline(now.Add(10 * time.Second))
 	if err := conn.WriteJSON(welcome); err != nil {
 		h.unregister(ac)
@@ -279,6 +355,43 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	h.offerUpdate(ac, hello)
 	h.readLoop(ac)
 	h.unregister(ac)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// Kick closes a node's live connection, e.g. after its token was revoked.
+func (h *Hub) Kick(id string) {
+	h.mu.RLock()
+	ac := h.agents[id]
+	h.mu.RUnlock()
+	if ac != nil {
+		h.log.Info("disconnecting agent", "agent", id)
+		ac.close()
+	}
+}
+
+// KickLegacy closes every connection made with the shared token, once that
+// token has been switched off.
+func (h *Hub) KickLegacy() {
+	h.mu.RLock()
+	var legacy []*agentConn
+	for _, ac := range h.agents {
+		if ac.legacy {
+			legacy = append(legacy, ac)
+		}
+	}
+	h.mu.RUnlock()
+	for _, ac := range legacy {
+		h.log.Info("disconnecting agent still on the shared token", "agent", ac.id)
+		ac.close()
+	}
 }
 
 // offerUpdate tells an agent to fetch the server's bundled build when the
@@ -312,9 +425,9 @@ func (h *Hub) lookupAgentGeo(ac *agentConn, ip string) {
 	}
 	ac.mu.Lock()
 	ac.status.GeoLocation, ac.status.GeoISP = loc, isp
-	st := ac.status
 	ac.mu.Unlock()
-	if err := h.store.UpsertAgent(&st); err != nil {
+	// An update, not an upsert: the node may have been deleted meanwhile.
+	if err := h.store.SetAgentGeo(ac.id, loc, isp); err != nil {
 		h.log.Error("store agent geo", "err", err)
 	}
 }
@@ -422,15 +535,17 @@ func (h *Hub) Agents() []*protocol.AgentStatus {
 	return out
 }
 
-// RemoveAgent deletes an offline agent's record.
+// RemoveAgent deletes a node, which also revokes its token; a connected
+// agent is dropped and cannot come back.
 func (h *Hub) RemoveAgent(id string) error {
-	h.mu.RLock()
-	_, online := h.agents[id]
-	h.mu.RUnlock()
-	if online {
-		return errors.New("agent is online")
+	if _, err := h.store.GetAgent(id); err != nil {
+		return err
 	}
-	return h.store.DeleteAgent(id)
+	if err := h.store.DeleteAgent(id); err != nil {
+		return err
+	}
+	h.Kick(id)
+	return nil
 }
 
 // --- tasks ------------------------------------------------------------------

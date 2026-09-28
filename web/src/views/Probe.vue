@@ -35,7 +35,7 @@ let userTouched = false
 async function loadAgents() {
   try {
     const { agents: list } = await api.agents()
-    agents.value = list
+    agents.value = list.filter((a) => a.online || a.auth !== '') // skip nodes created but never connected
     const online = new Set(list.filter((a) => a.online).map((a) => a.id))
     if (!userTouched) {
       selected.value = online

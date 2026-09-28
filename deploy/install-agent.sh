@@ -1,24 +1,31 @@
 #!/bin/sh
 # Install (or upgrade) probe-agent as a systemd service on a Linux host.
 #
-# One-liner, downloading the binary from your own dashboard:
+# Every node has its own token: create the node on the dashboard (节点 → 接入新节点)
+# and copy its command, which fills in everything below. One-liner, downloading
+# the binary from your own dashboard:
 #   curl -fsSL https://probe.example.com/install-agent.sh | sudo \
-#     PROBE_SERVER=https://probe.example.com PROBE_TOKEN=xxx \
+#     PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<this node's token> \
 #     PROBE_NAME=home-sz PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
 #
 # Or with a local binary:
 #   sudo PROBE_SERVER=... PROBE_TOKEN=... ./install-agent.sh ./probe-agent-linux-arm64
 #
+# The token is the node's identity: re-running with the same token overwrites
+# the install in place (upgrade, repair, move to another machine, change the
+# labels) and the dashboard keeps the same node, history and monitors.
+#
 # The binary lives in /var/lib/probe-agent (owned by a dedicated probe-agent
 # user) so the agent can update itself when the dashboard is upgraded.
-# Re-running this script is safe.
 set -eu
 
 : "${PROBE_SERVER:?PROBE_SERVER is required}"
-: "${PROBE_TOKEN:?PROBE_TOKEN is required}"
+: "${PROBE_TOKEN:?PROBE_TOKEN is required: copy the install command of this node from the dashboard (节点 → 接入新节点 / 安装命令)}"
 PROBE_NAME="${PROBE_NAME:-$(hostname)}"
 BIN_DIR=/var/lib/probe-agent
 BIN_SRC="${1:-}"
+# Where an agent that was migrated off the old shared token keeps its own token.
+TOKEN_FILE=$BIN_DIR/probe-agent.token
 
 if [ "$(id -u)" != 0 ]; then
   echo "run as root (sudo)" >&2; exit 1
@@ -29,6 +36,17 @@ fi
 
 cleanup() { [ -n "${TMP_BIN:-}" ] && rm -f "$TMP_BIN"; }
 trap cleanup EXIT
+
+# Re-run with the old shared token on a node that has since been handed its
+# own token: keep using the node's token (the shared one no longer works for it).
+if [ -f "$TOKEN_FILE" ] && command -v sha256sum >/dev/null 2>&1; then
+  own=$(sed -n 's/^PROBE_TOKEN=//p' "$TOKEN_FILE" | head -n1)
+  replaces=$(sed -n 's/^REPLACES_SHA256=//p' "$TOKEN_FILE" | head -n1)
+  if [ -n "$own" ] && [ "$(printf %s "$PROBE_TOKEN" | sha256sum | cut -d' ' -f1)" = "$replaces" ]; then
+    echo "this node already has its own token; using it instead of the shared one"
+    PROBE_TOKEN=$own
+  fi
+fi
 
 if [ -z "$BIN_SRC" ]; then
   case "$(uname -m)" in
@@ -46,7 +64,8 @@ if [ -z "$BIN_SRC" ]; then
   command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
   TMP_BIN=$(mktemp)
   echo "downloading $key from $PROBE_SERVER ..."
-  curl -fsSL -H "Authorization: Bearer $PROBE_TOKEN" "${PROBE_SERVER%/}/api/agent/download/$key" -o "$TMP_BIN"
+  curl -fsSL -H "Authorization: Bearer $PROBE_TOKEN" "${PROBE_SERVER%/}/api/agent/download/$key" -o "$TMP_BIN" || {
+    echo "download failed: check PROBE_SERVER, and that PROBE_TOKEN is this node's current token (401 = unknown, reset or deleted node)" >&2; exit 1; }
   BIN_SRC="$TMP_BIN"
 elif [ ! -f "$BIN_SRC" ]; then
   echo "binary not found: $BIN_SRC" >&2; exit 2
@@ -73,7 +92,8 @@ if [ -L "$BIN_DIR" ]; then
 fi
 install -d -m 0755 "$BIN_DIR"
 install -m 0755 "$BIN_SRC" "$BIN_DIR/probe-agent"
-rm -f "$BIN_DIR"/.probe-agent-update-* 2>/dev/null || true
+# The token written to /etc/probe-agent.env below is authoritative from now on.
+rm -f "$BIN_DIR"/.probe-agent-update-* "$TOKEN_FILE" "$TOKEN_FILE.tmp" 2>/dev/null || true
 chown -R "$SVC_USER:$SVC_USER" "$BIN_DIR"
 # Legacy location from earlier installs.
 [ -f /usr/local/bin/probe-agent ] && rm -f /usr/local/bin/probe-agent
@@ -121,4 +141,5 @@ systemctl restart probe-agent
 sleep 2
 systemctl --no-pager --lines=0 status probe-agent || true
 echo
-echo "installed $("$BIN_DIR/probe-agent" version). logs: journalctl -u probe-agent -f"
+echo "installed $("$BIN_DIR/probe-agent" version) as node $PROBE_NAME. logs: journalctl -u probe-agent -f"
+echo "re-run the same command (same token) any time to upgrade or reconfigure this node in place."

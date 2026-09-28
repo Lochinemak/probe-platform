@@ -1,5 +1,8 @@
 # Standalone agent for a NAS / home server. Works on x86_64, arm64 and armv7.
-#   PROBE_SERVER=https://probe.example.com PROBE_TOKEN=... PROBE_NAME=home-sz \
+# PROBE_TOKEN is this node's own token: create the node on the dashboard
+# (节点 → 接入新节点). Re-running with the same token replaces the container and
+# keeps the same node on the dashboard.
+#   PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<this node's token> PROBE_NAME=home-sz \
 #   docker compose -f docker-compose.agent.yml up -d
 services:
   agent:

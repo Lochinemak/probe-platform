@@ -21,7 +21,7 @@ func (c Config) ClientIP(r *http.Request) string {
 type Config struct {
 	Listen            string
 	DataDir           string
-	AgentToken        string
+	AgentToken        string // legacy shared agent token; nodes now have their own
 	AdminPassword     string
 	AdminUser         string // username for password login (default admin)
 	GuestAccess       bool   // anonymous visitors may run probes (limited view)
@@ -73,8 +73,8 @@ func LoadConfig(args []string) Config {
 	fs := flag.NewFlagSet("probe-server", flag.ExitOnError)
 	var c Config
 	fs.StringVar(&c.Listen, "listen", envOr("PROBE_LISTEN", ":8080"), "listen address")
-	fs.StringVar(&c.DataDir, "data", envOr("PROBE_DATA_DIR", "./data"), "data directory (sqlite db, token file, geoip db)")
-	fs.StringVar(&c.AgentToken, "agent-token", envOr("PROBE_AGENT_TOKEN", ""), "shared secret agents authenticate with (generated and stored in data dir when empty)")
+	fs.StringVar(&c.DataDir, "data", envOr("PROBE_DATA_DIR", "./data"), "data directory (sqlite db, geoip db)")
+	fs.StringVar(&c.AgentToken, "agent-token", envOr("PROBE_AGENT_TOKEN", ""), "legacy shared agent token, only for migrating nodes installed before per-node tokens (default: <data>/agent_token if that file exists)")
 	fs.StringVar(&c.AdminPassword, "admin-password", envOr("PROBE_ADMIN_PASSWORD", ""), "dashboard password (empty = no login)")
 	fs.StringVar(&c.AdminUser, "admin-user", envOr("PROBE_ADMIN_USER", "admin"), "username for password login")
 	fs.BoolVar(&c.GuestAccess, "guest", envBool("PROBE_GUEST", true), "let anonymous visitors run probes and view results (node details hidden)")

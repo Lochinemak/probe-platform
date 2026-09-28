@@ -41,6 +41,11 @@ type settingsValues struct {
 	AgentImage     string
 	SessionSecret  string
 	SessionEpoch   int
+	// LegacyToken is the old shared agent token (PROBE_AGENT_TOKEN or
+	// data/agent_token), never stored in the database. LegacyEnabled says
+	// whether it is still accepted while nodes migrate to their own tokens.
+	LegacyToken   string
+	LegacyEnabled bool
 }
 
 // SettingsView is what the dashboard sees; secrets are reported as booleans.
@@ -58,6 +63,7 @@ type SettingsView struct {
 	BaseURL          string `json:"base_url"`
 	AgentImage       string `json:"agent_image"`
 	LoginEnabled     bool   `json:"login_enabled"`
+	LegacyAgentToken string `json:"legacy_agent_token"` // none, enabled, disabled
 }
 
 // SettingsPatch is a partial update; nil fields are left unchanged. An empty
@@ -71,6 +77,8 @@ type SettingsPatch struct {
 	LogtoAppID     *string `json:"logto_app_id"`
 	LogtoAppSecret *string `json:"logto_app_secret"`
 	LogtoAdmins    *string `json:"logto_admins"`
+	// LegacyAgentToken switches the old shared agent token on or off.
+	LegacyAgentToken *bool `json:"legacy_agent_token"`
 }
 
 // LoadSettings merges env defaults with what the dashboard saved.
@@ -85,6 +93,8 @@ func LoadSettings(store *Store, env Config, log *slog.Logger) (*Settings, error)
 		LogtoAdmins:    env.LogtoAdmins,
 		BaseURL:        env.BaseURL,
 		AgentImage:     env.AgentImage,
+		LegacyToken:    strings.TrimSpace(env.AgentToken),
+		LegacyEnabled:  true,
 	}
 	if v.AdminUser == "" {
 		v.AdminUser = "admin"
@@ -109,6 +119,9 @@ func LoadSettings(store *Store, env Config, log *slog.Logger) (*Settings, error)
 		if s, ok := db[key]; ok {
 			*dst = s
 		}
+	}
+	if s, ok := db["legacy_agent_token_enabled"]; ok {
+		v.LegacyEnabled = s == "true"
 	}
 	if s, ok := db["session_epoch"]; ok {
 		v.SessionEpoch, _ = strconv.Atoi(s)
@@ -140,6 +153,7 @@ func (s *Settings) View() SettingsView {
 		PasswordSet:   v.PasswordHash != "" || v.EnvPassword != "",
 		LogtoEndpoint: v.LogtoEndpoint, LogtoAppID: v.LogtoAppID, LogtoSecretSet: v.LogtoAppSecret != "", LogtoAdmins: v.LogtoAdmins,
 		BaseURL: v.BaseURL, AgentImage: v.AgentImage,
+		LegacyAgentToken: s.LegacyTokenState(),
 	}
 	switch {
 	case v.PasswordHash != "":
@@ -165,6 +179,29 @@ func (s *Settings) SessionSecret() string {
 	return s.snapshot().SessionSecret
 }
 func (s *Settings) SessionEpoch() int { return s.snapshot().SessionEpoch }
+
+// LegacyAgentToken returns the old shared agent token while it is accepted,
+// "" when there is none or it has been switched off.
+func (s *Settings) LegacyAgentToken() string {
+	v := s.snapshot()
+	if !v.LegacyEnabled {
+		return ""
+	}
+	return v.LegacyToken
+}
+
+// LegacyTokenState is "none" (no shared token configured), "enabled" or
+// "disabled".
+func (s *Settings) LegacyTokenState() string {
+	v := s.snapshot()
+	switch {
+	case v.LegacyToken == "":
+		return "none"
+	case v.LegacyEnabled:
+		return "enabled"
+	}
+	return "disabled"
+}
 
 // PasswordLoginEnabled reports whether a password (dashboard or env) exists.
 func (s *Settings) PasswordLoginEnabled() bool {
@@ -269,6 +306,13 @@ func (s *Settings) Update(p SettingsPatch) error {
 	if p.LogtoAdmins != nil {
 		v.LogtoAdmins = strings.TrimSpace(*p.LogtoAdmins)
 		kv["logto_admins"] = v.LogtoAdmins
+	}
+	if p.LegacyAgentToken != nil {
+		if v.LegacyToken == "" && *p.LegacyAgentToken {
+			return errors.New("没有配置旧版共享 token（PROBE_AGENT_TOKEN / data/agent_token），无需启用")
+		}
+		v.LegacyEnabled = *p.LegacyAgentToken
+		kv["legacy_agent_token_enabled"] = strconv.FormatBool(v.LegacyEnabled)
 	}
 	if len(kv) == 0 {
 		return nil
