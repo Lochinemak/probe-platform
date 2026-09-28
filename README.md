@@ -1,6 +1,6 @@
 # probe-platform · 自部署拨测系统
 
-类似 [itdog.cn](https://www.itdog.cn) 的多节点网络拨测平台：在自己的服务器上部署 Dashboard，在腾讯云、亲戚朋友家里的 NAS（x86 / ARM）上跑 agent，从多个地域、多个运营商同时对目标做：
+类似 [itdog.cn](https://www.itdog.cn) 的多节点网络拨测平台：在自己的服务器上部署 Dashboard，在腾讯云、亲戚朋友家里的 NAS（x86 / ARM）或 Windows 电脑上跑 agent，从多个地域、多个运营商同时对目标做：
 
 | 类型 | 内容 |
 | --- | --- |
@@ -21,7 +21,7 @@
 ```
 
 - **agent 永远是出站连接**：通过一条 WebSocket 长连接接收任务、流式回传结果，断线自动重连。家用宽带没有公网 IP、路由器不用做端口映射。
-- **纯 Go、无 cgo**：一条命令交叉编译出 `linux/amd64`、`arm64`、`armv7`、`mips` 等所有 NAS 常见架构；SQLite 用 modernc 纯 Go 驱动。
+- **纯 Go、无 cgo**：一条命令交叉编译出 `linux/amd64`、`arm64`、`armv7`、`mips` 等所有 NAS 常见架构，以及 Windows（x64 / ARM64 / x86）、macOS、FreeBSD；SQLite 用 modernc 纯 Go 驱动。agent 是单个静态二进制，目标机器不需要装任何运行库。
 - **实时**：任务下发后每个 ping 包、每一轮 MTR 都会通过 SSE 推到浏览器，体验与 itdog 一致。
 
 ## 快速开始
@@ -85,6 +85,25 @@ curl -fsSL $PROBE_SERVER/install-agent-openwrt.sh | sh
 - 装好后 `logread -e probe-agent` 看日志，`/etc/init.d/probe-agent restart` 重启，配置在 `/etc/probe-agent.env`。自更新同样有效。
 - 如果这台路由器自己就在跑 OpenClash，它本机的 DNS 也是 fake-IP，域名类探测会失真；这种情况下把节点装在路由器后面的机器上更合适，或者用旁路由 / 二级 AP 上的 iStoreOS 做节点。
 
+**Windows 10 / 11 电脑**（装成 Windows 服务：开机自启、随 dashboard 自动更新）。右键「开始」→「终端（管理员）」或「Windows PowerShell（管理员）」，粘贴：
+
+```powershell
+$env:PROBE_SERVER='https://probe.example.com'
+$env:PROBE_TOKEN='<data/agent_token 的内容>'
+$env:PROBE_NAME='home-win'
+$env:PROBE_LOCATION='广东 深圳'
+$env:PROBE_ISP='电信'
+irm "$env:PROBE_SERVER/install-agent.ps1" | iex
+```
+
+Dashboard「节点」页会生成填好的版本。
+
+- **系统要求与依赖**：Windows 10 / 11 或 Windows Server 2016 及以上（Go 运行时的下限，Windows 7 / 8 不支持），x64、ARM64、32 位 x86 都有构建，脚本按 CPU 自动选择。**不需要安装任何运行库**：agent 是单个静态链接的 exe，不依赖 .NET、VC++ 运行库或 Npcap；安装脚本只用系统自带的 PowerShell 5.1，并会先检查管理员权限、系统版本、CPU 架构，强制 TLS 1.2 以兼容旧版 .NET 的下载。
+- **安装到哪**：`C:\ProgramData\probe-agent\`，含 `probe-agent.exe`、配置 `probe-agent.env`（仅 SYSTEM 与管理员可读）、日志 `probe-agent.log`（5 MB 轮转一次）。服务名 `probe-agent`（显示为 probe-platform agent），以 LocalSystem 运行，raw socket 权限齐全，ping / MTR（ICMP、UDP、TCP 三种）全部可用；服务异常退出 5 秒内由服务管理器自动拉起——自更新在 Windows 上就是靠这个完成重启（Windows 不能原地 exec）。
+- **防火墙**：脚本给这个 exe 加两条入站规则（仅 ICMPv4 / ICMPv6），保证 ping 与 MTR 的回包能到达 raw socket；agent 不监听任何端口。360、火绒之类安全软件可能拦截新装的服务或未签名的 exe，放行即可；Defender 偶尔会对 Go 程序误报，可把该目录加入排除项。
+- **管理**：管理员 PowerShell 里 `& 'C:\ProgramData\probe-agent\probe-agent.exe' service status`（或 `restart` / `stop` / `uninstall`），或在「服务」管理器里找 probe-platform agent；本地验证 `& 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com`。重复执行安装命令即升级或改配置。
+- **注意**：电脑睡眠时节点离线，建议在「电源和睡眠」里把睡眠设为「从不」，或者只用常开的机器。
+
 **群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数；Dashboard 节点页也会生成填好地址、token 和节点名的版本。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
 
 **Docker**（Unraid / 任意有 Docker 的机器）：
@@ -110,6 +129,7 @@ probe-agent test www.qq.com         # 依次跑 ping / tcping / http / mtr 并�
 probe-agent test mtr 1.1.1.1 protocol=tcp port=443   # 参数用 key=value 追加
 probe-agent test dns www.qq.com dns_server=223.5.5.5
 sudo /var/lib/probe-agent/probe-agent test www.qq.com   # 已用 systemd 安装的机器
+& 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com   # Windows（PowerShell）
 ```
 
 节点页会显示每个 agent 检测到的能力（`icmp_raw` / `mtr` / `ipv6`）。没有 raw socket 权限时 MTR 不可用，ping 会退回到非特权 ICMP（Linux 需要 `net.ipv4.ping_group_range` 覆盖运行用户的 gid）。
@@ -120,7 +140,7 @@ server 镜像里自带所有平台的 agent 二进制（`PROBE_AGENTS_DIR`，Doc
 
 1. agent 连上时上报自己的版本；server 发现与自身版本不一致，且有该平台的二进制，就下发 `update` 消息。
 2. agent 随机等待 0～20 秒（避免全网节点同时下载），从 `/api/agent/download/<os>-<arch>` 下载到二进制所在目录，校验 sha256 和大小，运行一次 `version` 确认新文件能执行并且版本正确。
-3. 等当前任务跑完（最多 60 秒），把旧文件改名为 `probe-agent.prev`，新文件原子替换，然后原地 `exec` 重启（PID 不变，systemd 无感知，ambient capabilities 保留）。
+3. 等当前任务跑完（最多 60 秒），把旧文件改名为 `probe-agent.prev`，新文件原子替换，然后原地 `exec` 重启（PID 不变，systemd 无感知，ambient capabilities 保留）。Windows 不能原地 exec：agent 直接退出，由 `service install` 配置的服务恢复策略在 5 秒内重新拉起。
 4. 失败会记录日志并在 10 分钟内不再重试；旧版本继续工作。
 
 所以 dashboard 每次通过 CI/CD 更新后，server 重启导致所有 agent 重连，几十秒内全网节点自动跟上。语义是「与 server 版本保持一致」，回滚 server 时 agent 也会跟着回滚。
@@ -128,6 +148,17 @@ server 镜像里自带所有平台的 agent 二进制（`PROBE_AGENTS_DIR`，Doc
 - 只有真实构建（版本号不是 `dev`）之间才会触发。
 - `PROBE_SELF_UPDATE=false` 关闭；Docker 镜像里默认关闭。
 - 早期用 `/usr/local/bin` + setcap 方式安装的节点重新跑一次安装脚本即可迁移到新布局。
+
+### 3.2 卸载 agent
+
+一条命令，Linux（systemd）和 OpenWrt / iStoreOS（procd）通用。脚本自动识别安装方式：停掉并禁用服务，删除二进制及自更新残留（`probe-agent.prev`、`.probe-agent-update-*`）、`/etc/probe-agent.env`、systemd unit / init 脚本、`probe-agent` 系统用户；顺带清掉早期 `/usr/local/bin` 布局的文件。没装过或重复执行都无副作用。
+
+```bash
+curl -fsSL https://probe.example.com/uninstall-agent.sh | sudo sh      # Linux
+curl -fsSL https://probe.example.com/uninstall-agent.sh | sh           # OpenWrt / iStoreOS（已是 root）
+```
+
+想保留配置以便之后重装：`curl -fsSL .../uninstall-agent.sh | sudo sh -s -- --keep-config`（`--keep-user` 保留系统用户）。Windows 在管理员 PowerShell 里执行 `$env:PROBE_UNINSTALL='1'; irm https://probe.example.com/install-agent.ps1 | iex`，会停止并删除服务、防火墙规则和 `C:\ProgramData\probe-agent` 目录（`$env:PROBE_KEEP_CONFIG='1'` 保留配置文件）。Docker 节点不归脚本管：`docker rm -f probe-agent`，群晖 / 威联通在 Container Manager / Container Station 里删除该项目即可。卸载不会删除 dashboard 里的节点记录，节点会变成离线，到「节点」页删除。
 
 ### 4. 可选：MTR 每跳地区标注
 
@@ -178,7 +209,7 @@ server（flag 或环境变量）：
 | `PROBE_AGENTS_DIR` | 空（Docker 镜像内已设） | 存放 `probe-agent-<os>-<arch>` 二进制的目录，用于 agent 自更新与安装脚本下载 |
 | `PROBE_AGENT_IMAGE` | `ghcr.io/lochinemak/probe-agent:latest` | 节点页展示的 Docker 镜像名（大陆可填镜像站地址） |
 
-agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为节点唯一 ID）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）、`PROBE_SELF_UPDATE`（默认 `true`）。
+agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为节点唯一 ID）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）、`PROBE_SELF_UPDATE`（默认 `true`）、`PROBE_ENV_FILE` / `--env-file`（KEY=VALUE 配置文件，优先级低于环境变量与 flag；Windows 服务用它读配置）、`PROBE_LOG_FILE` / `--log-file`（写到日志文件并按 5 MB 轮转，Windows 服务默认写 exe 旁的 `probe-agent.log`）。
 
 ## API
 
@@ -232,7 +263,7 @@ internal/server            另含 scheduler（定时监控与告警状态机）�
 internal/agent             WebSocket 客户端、任务执行、重连
 internal/server            hub（连接与任务调度）、SQLite 存储、HTTP/SSE API、鉴权、GeoIP
 web/                       Vue 3 + Vite 前端，构建后由 server embed
-deploy/                    Dockerfile、compose、systemd、安装脚本、反向代理示例；deploy/prod 为当前生产实例的文件
+deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚本、反向代理示例；deploy/prod 为当前生产实例的文件
 ```
 
 开发时：`make run-server` 起后端，`cd web && npm run dev` 起前端（已配置代理），`make run-agent` 在本机接一个 agent。
