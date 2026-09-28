@@ -49,6 +49,7 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logg
 	mux.Handle("GET /api/tasks/{id}", a.protect(a.getTask))
 	mux.Handle("GET /api/tasks/{id}/events", a.protect(a.taskEvents))
 	mux.Handle("POST /api/tasks/{id}/cancel", a.protect(a.cancelTask))
+	mux.Handle("GET /api/agent/token", a.protect(a.agentToken))
 	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
 	mux.HandleFunc("GET /install-agent.sh", a.installScript)
@@ -110,6 +111,12 @@ func (a *API) protectAgentOrSession(next http.HandlerFunc) http.Handler {
 }
 
 var agentKeyRe = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`)
+
+// agentToken reveals the shared agent secret to a logged-in dashboard user so
+// the onboarding snippets can be copied ready to run.
+func (a *API) agentToken(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"token": a.cfg.AgentToken})
+}
 
 // agentVersion lists the agent binaries bundled with this server.
 func (a *API) agentVersion(w http.ResponseWriter, _ *http.Request) {

@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { ms, bytes, statusLabel, agentPlace, fmtTime } from '../fmt.js'
+import ErrorBadge from './ErrorBadge.vue'
 
 defineProps({ task: Object, results: Array })
 const open = ref({})
@@ -62,7 +63,7 @@ function phaseWidths(t) {
             </td>
             <td>
               <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-              <span v-else-if="r.status === 'error' || (r.last && !r.last.ok)" class="badge error" :title="r.error || r.last?.error">{{ r.error || r.last?.error || '失败' }}</span>
+              <ErrorBadge v-else-if="r.status === 'error' || (r.last && !r.last.ok)" :message="r.error || r.last?.error || '失败'" />
               <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
             </td>
           </tr>

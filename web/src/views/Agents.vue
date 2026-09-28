@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
+import Onboarding from '../components/Onboarding.vue'
 
 const props = defineProps({
   agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' },
@@ -25,7 +26,6 @@ async function remove(a) {
   try { await api.deleteAgent(a.id); await load() } catch (e) { error.value = e.message }
 }
 const online = computed(() => agents.value.filter((a) => a.online).length)
-const serverURL = computed(() => `${location.protocol}//${location.host}`)
 onMounted(() => { load(); loadDownloads(); timer = setInterval(load, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
@@ -65,46 +65,6 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
     </div>
 
-    <div class="card">
-      <h3>接入新节点</h3>
-      <p class="sub">在腾讯云服务器、家里的 NAS（x86 / ARM）上运行 agent，它会主动连接本服务器，无需公网 IP 或端口映射。Token 在服务器 <code>data/agent_token</code> 文件（或 <code>PROBE_AGENT_TOKEN</code>）中。</p>
-      <details open>
-        <summary>Linux + systemd 一条命令（推荐；之后随 dashboard 自动更新）</summary>
-        <pre class="cmd">curl -fsSL {{ serverURL }}/install-agent.sh | sudo \
-  PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; \
-  PROBE_NAME=home-shenzhen PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh</pre>
-        <p class="sub" v-if="downloads.length">本服务端自带的 agent 二进制（v{{ serverVersion }}）：
-          <a v-for="f in downloads" :key="f.key" :href="'/api/agent/download/' + f.key" style="margin-right:10px">{{ f.key }}</a>
-        </p>
-      </details>
-      <details>
-        <summary>OpenWrt / iStoreOS 路由器（procd）</summary>
-        <pre class="cmd">curl -fsSL {{ serverURL }}/install-agent-openwrt.sh | \
-  PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; \
-  PROBE_NAME=home-router PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh</pre>
-        <p class="sub">arm64（MT7981 / MT7986）与 32 位 MIPS（MT7621）均支持；日志 <code>logread -e probe-agent</code>。</p>
-      </details>
-      <details>
-        <summary>Docker（群晖 / QNAP / Unraid 均可，升级靠拉新镜像；样例见仓库 deploy/nas/）</summary>
-        <pre class="cmd">docker run -d --name probe-agent --restart unless-stopped \
-  --network host --cap-add NET_RAW \
-  -e PROBE_SERVER={{ serverURL }} \
-  -e PROBE_TOKEN=&lt;agent token&gt; \
-  -e PROBE_NAME=home-shenzhen -e PROBE_LOCATION="广东 深圳" -e PROBE_ISP=电信 \
-  {{ props.agentImage }}</pre>
-      </details>
-      <details>
-        <summary>手动：先下载再安装</summary>
-        <pre class="cmd">curl -fsSL -H "Authorization: Bearer &lt;agent token&gt;" {{ serverURL }}/api/agent/download/linux-arm64 -o probe-agent
-curl -fsSL {{ serverURL }}/install-agent.sh -o install-agent.sh
-sudo PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; PROBE_NAME=nas-1 sh install-agent.sh ./probe-agent</pre>
-      </details>
-      <details>
-        <summary>先在本机验证探测能力</summary>
-        <pre class="cmd">probe-agent test www.qq.com          # 依次跑 ping / tcping / http / mtr
-probe-agent test mtr 1.1.1.1
-# 已用 systemd 安装的机器上：sudo /var/lib/probe-agent/probe-agent test www.qq.com</pre>
-      </details>
-    </div>
+    <Onboarding :agent-image="props.agentImage" :server-version="props.serverVersion" :downloads="downloads" />
   </div>
 </template>

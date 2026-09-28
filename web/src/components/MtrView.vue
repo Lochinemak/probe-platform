@@ -1,5 +1,6 @@
 <script setup>
 import { ms, pct, lossClass, statusLabel, agentPlace } from '../fmt.js'
+import ErrorBadge from './ErrorBadge.vue'
 defineProps({ task: Object, results: Array })
 </script>
 
@@ -15,7 +16,7 @@ defineProps({ task: Object, results: Array })
         <span class="badge warn" v-else-if="r.status === 'done'">未到达目标</span>
         <span class="spacer"></span>
         <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-        <span v-else-if="r.status === 'error'" class="badge error">{{ r.error || '失败' }}</span>
+        <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
         <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
       </div>
       <div class="table-wrap" v-if="r.hops?.length">

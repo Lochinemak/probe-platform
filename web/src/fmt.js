@@ -53,6 +53,23 @@ export function timeAgo(iso) {
 
 export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR' }
 
+// Compact label for an error message; the full text is shown in a popover.
+export function errorLabel(msg) {
+  const m = String(msg || '').toLowerCase()
+  if (!m) return '失败'
+  if (m.includes('fake-ip')) return 'fake-IP'
+  if (m.includes('timeout') || m.includes('deadline')) return '超时'
+  if (m.includes('disconnected')) return '节点断开'
+  if (m.includes('offline')) return '节点离线'
+  if (m.includes('cancelled')) return '已取消'
+  if (m.includes('no such host')) return '域名不存在'
+  if (m.includes('refused')) return '连接被拒'
+  if (m.includes('unreachable')) return '不可达'
+  if (m.includes('not permitted') || m.includes('raw icmp') || m.includes('cap_net_raw')) return '无权限'
+  if (m.includes('certificate') || m.includes('x509') || m.includes('tls')) return 'TLS 错误'
+  return '失败'
+}
+
 export function statusLabel(s) {
   return { pending: '等待', running: '进行中', done: '完成', error: '失败' }[s] || s
 }

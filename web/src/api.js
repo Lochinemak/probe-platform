@@ -28,6 +28,7 @@ export const api = {
   createTask: (body) => request('POST', '/api/tasks', body),
   cancelTask: (id) => request('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
   agentFiles: () => request('GET', '/api/agent/version'),
+  agentToken: () => request('GET', '/api/agent/token'),
 }
 
 // subscribe opens the SSE stream for a task. Returns a function that closes it.

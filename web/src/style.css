@@ -129,3 +129,12 @@ details summary { cursor: pointer; color: var(--muted); }
   .topbar { height: auto; flex-wrap: wrap; padding: 10px 0; }
   .app { padding: 0 10px 30px; }
 }
+
+.badge.clickable { cursor: pointer; }
+.popover { position: fixed; z-index: 1000; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 34px rgba(0,0,0,.35); }
+.popover-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.popover-text { white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; max-height: 40vh; overflow: auto; }
+.popover-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+.snippet { position: relative; }
+.snippet .copy { position: absolute; top: 12px; right: 8px; }
+.snippet pre.cmd { padding-right: 70px; }

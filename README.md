@@ -55,19 +55,27 @@ PROBE_ADMIN_PASSWORD=你的密码 ./bin/probe-server --listen :8080 --data ./dat
 **Linux + systemd 一条命令**（推荐，之后随 dashboard 自动更新）：
 
 ```bash
-curl -fsSL https://probe.example.com/install-agent.sh | sudo \
-  PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<data/agent_token 的内容> \
-  PROBE_NAME=home-shenzhen PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
+export PROBE_SERVER=https://probe.example.com
+export PROBE_TOKEN=<data/agent_token 的内容>
+export PROBE_NAME=home-shenzhen
+export PROBE_LOCATION="广东 深圳"
+export PROBE_ISP=电信
+curl -fsSL $PROBE_SERVER/install-agent.sh | sudo -E sh
 ```
+
+Dashboard 的「节点」页会按你的服务器地址、token 和填写的节点名生成可直接复制的版本。
 
 脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mipsle / mips / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。重复执行即升级或改配置。
 
 **OpenWrt / iStoreOS 路由器**（procd，无 systemd，以 root 运行）：
 
 ```bash
-curl -fsSL https://probe.example.com/install-agent-openwrt.sh | \
-  PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<token> \
-  PROBE_NAME=home-router PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
+export PROBE_SERVER=https://probe.example.com
+export PROBE_TOKEN=<token>
+export PROBE_NAME=home-router
+export PROBE_LOCATION="广东 深圳"
+export PROBE_ISP=电信
+curl -fsSL $PROBE_SERVER/install-agent-openwrt.sh | sh
 ```
 
 - 占用约 8 MB overlay 空间、10 MB 内存；128 MB 闪存 / 512 MB 内存的机器绰绰有余，16 MB 闪存的老路由不建议。
@@ -75,16 +83,19 @@ curl -fsSL https://probe.example.com/install-agent-openwrt.sh | \
 - 装好后 `logread -e probe-agent` 看日志，`/etc/init.d/probe-agent restart` 重启，配置在 `/etc/probe-agent.env`。自更新同样有效。
 - 如果这台路由器自己就在跑 OpenClash，它本机的 DNS 也是 fake-IP，域名类探测会失真；这种情况下把节点装在路由器后面的机器上更合适，或者用旁路由 / 二级 AP 上的 iStoreOS 做节点。
 
-**群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
+**群晖 / 威联通 NAS 用 Docker**：`deploy/nas/synology-dsm.compose.yml`、`deploy/nas/qnap-container-station.compose.yml` 是可直接粘贴到 Container Manager「项目」/ Container Station「应用程序」的样例，注释里说明了每个特殊参数；Dashboard 节点页也会生成填好地址、token 和节点名的版本。要点只有三个：`network_mode: host`（走 NAS 真实网络栈）、`cap_add: [NET_RAW]`（ICMP / MTR 需要，比「特权模式」安全）、镜像走大陆可达的镜像站。容器不自更新，升级靠重新拉镜像，样例里附了可选的 Watchtower 配置。
 
 **Docker**（Unraid / 任意有 Docker 的机器）：
 
 ```bash
+export PROBE_SERVER=https://probe.example.com
+export PROBE_TOKEN=<data/agent_token 的内容>
+export PROBE_NAME=home-shenzhen
+export PROBE_LOCATION="广东 深圳"
+export PROBE_ISP=电信
 docker run -d --name probe-agent --restart unless-stopped \
   --network host --cap-add NET_RAW \
-  -e PROBE_SERVER=https://probe.example.com \
-  -e PROBE_TOKEN=<data/agent_token 的内容> \
-  -e PROBE_NAME=home-shenzhen -e PROBE_LOCATION="广东 深圳" -e PROBE_ISP=电信 \
+  -e PROBE_SERVER -e PROBE_TOKEN -e PROBE_NAME -e PROBE_LOCATION -e PROBE_ISP \
   ghcr.91856478.xyz/lochinemak/probe-agent:latest   # 镜像站；源站为 ghcr.io/lochinemak/probe-agent
 ```
 

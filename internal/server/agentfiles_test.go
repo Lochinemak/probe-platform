@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +118,22 @@ func TestAgentDownloadAPI(t *testing.T) {
 	if r := get("/api/agent/download/../etc", "tok"); r.StatusCode == 200 {
 		t.Fatal("path traversal must not serve")
 	}
+	// The token endpoint is for dashboard sessions only, never for agents.
+	if r := get("/api/agent/token", "tok"); r.StatusCode != 401 {
+		t.Fatalf("token with agent bearer: %d", r.StatusCode)
+	}
+	jar, _ := cookiejar.New(nil)
+	sess := &http.Client{Jar: jar}
+	if resp, err := sess.Post(srv.URL+"/api/login", "application/json", strings.NewReader(`{"password":"pw"}`)); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("login: %v %v", err, resp)
+	}
+	resp, _ := sess.Get(srv.URL + "/api/agent/token")
+	var tk map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&tk)
+	if resp.StatusCode != 200 || tk["token"] != "tok" {
+		t.Fatalf("token via session: %d %v", resp.StatusCode, tk)
+	}
+
 	r = get("/install-agent.sh", "")
 	b, _ = io.ReadAll(r.Body)
 	if r.StatusCode != 200 || string(b) != "#!/bin/sh\necho hi\n" {

@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { ms, pct, lossClass, rttClass, statusLabel, agentPlace } from '../fmt.js'
 import Sparkline from './Sparkline.vue'
+import ErrorBadge from './ErrorBadge.vue'
 
 const props = defineProps({ task: Object, results: Array })
 const sortKey = ref('')
@@ -57,7 +58,7 @@ const count = computed(() => props.task.params?.count || 10)
           <td><Sparkline :replies="r.replies || []" :total="r.live ? count : 0" /></td>
           <td>
             <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-            <span v-else-if="r.status === 'error'" class="badge error" :title="r.error">{{ r.error || '失败' }}</span>
+            <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
             <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
           </td>
         </tr>
