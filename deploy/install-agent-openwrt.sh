@@ -39,8 +39,16 @@ if [ -z "$BIN_SRC" ]; then
     i?86)           key=linux-386 ;;
     riscv64)        key=linux-riscv64 ;;
     mips64el)       key=linux-mips64le ;;
-    mips|mipsel)    # MT7621 and friends: 32-bit MIPS, endianness from the ELF header of /bin/sh
-                    if [ "$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 01 ]; then key=linux-mipsle; else key=linux-mips; fi ;;
+    mips|mipsel)    # MT7621 and friends: 32-bit MIPS. Endianness from byte 5 of /bin/sh's ELF header
+                    # (01 = little). Busybox builds may lack od/hexdump; MediaTek/Ralink SoCs are little-endian.
+                    if command -v od >/dev/null 2>&1; then
+                      b=$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+                    elif command -v hexdump >/dev/null 2>&1; then
+                      b=$(dd if=/bin/sh bs=1 skip=5 count=1 2>/dev/null | hexdump -e '1/1 "%02x"')
+                    else
+                      echo "warning: cannot detect endianness (no od/hexdump); assuming little-endian" >&2; b=01
+                    fi
+                    if [ "$b" = 02 ]; then key=linux-mips; else key=linux-mipsle; fi ;;
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
   esac
   TMP_BIN=$(mktemp)
