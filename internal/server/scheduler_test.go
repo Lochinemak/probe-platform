@@ -41,6 +41,13 @@ func TestSampleFromResult(t *testing.T) {
 		t.Fatalf("http assertion fail: %+v", sm)
 	}
 
+	// Results from agents predating assertions carry neither field: still OK.
+	sm = sampleFromResult(httpM, &protocol.AgentResult{AgentID: "a", Status: protocol.StatusDone,
+		Data: mustJSON(map[string]any{"attempts": []map[string]any{{"ok": true, "status_code": 200, "timing": map[string]any{"total_ms": 50}}}})}, now)
+	if !sm.OK || sm.LatencyMs != 50 {
+		t.Fatalf("legacy http result: %+v", sm)
+	}
+
 	mtr := &protocol.Monitor{ID: "m3", Type: protocol.TaskMTR}
 	sm = sampleFromResult(mtr, &protocol.AgentResult{AgentID: "a", Status: protocol.StatusDone,
 		Data: mustJSON(protocol.MTRResult{Reached: true, Hops: []protocol.MTRHop{{TTL: 1, AvgMs: 1}, {TTL: 2, AvgMs: 9, LossPct: 10}}})}, now)

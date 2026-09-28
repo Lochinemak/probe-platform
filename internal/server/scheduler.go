@@ -146,9 +146,12 @@ func sampleFromResult(m *protocol.Monitor, r *protocol.AgentResult, at time.Time
 			sm.LossPct = 100
 			return sm
 		}
+		// Agents older than the assertion feature send no assertions and no
+		// assert_ok; treat those as passing rather than failing every run.
+		assertOK := func(a protocol.HTTPAttempt) bool { return a.AssertOK || len(a.Assertions) == 0 }
 		okN := 0
 		for _, a := range hr.Attempts {
-			if a.OK && a.AssertOK {
+			if a.OK && assertOK(a) {
 				okN++
 			}
 		}
@@ -159,7 +162,7 @@ func sampleFromResult(m *protocol.Monitor, r *protocol.AgentResult, at time.Time
 		if last.OK {
 			sm.LatencyMs = last.Timing.TotalMs
 		}
-		sm.OK = last.OK && last.AssertOK
+		sm.OK = last.OK && assertOK(last)
 		if !sm.OK {
 			sm.Error = last.Error
 			if sm.Error == "" {
