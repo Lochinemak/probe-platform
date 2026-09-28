@@ -7,14 +7,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # web/dist is only needed by the server; give the embed a stub so the module still compiles.
-RUN mkdir -p web/dist && [ -f web/dist/index.html ] || echo '<html></html>' > web/dist/index.html
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
-    go build -trimpath -ldflags "-s -w -X probe-platform/internal/buildinfo.Version=$VERSION" -o /out/probe-agent ./cmd/agent
+    go build -trimpath -ldflags "-s -w -X probe-platform/internal/buildinfo.Version=$VERSION -X probe-platform/internal/buildinfo.Variant=${TARGETARCH:+}${TARGETVARIANT}" -o /out/probe-agent ./cmd/agent
 
 FROM alpine:3.21
 LABEL org.opencontainers.image.source="https://github.com/Lochinemak/probe-platform"
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/probe-agent /usr/local/bin/probe-agent
-# Runs as root by default so raw ICMP (ping/mtr) works; pass --cap-add NET_RAW
-# and optionally --user if you drop privileges.
+# Runs as root by default so raw ICMP (ping/mtr) works; pass --cap-add NET_RAW.
+# Containers are updated by pulling a new image (e.g. Watchtower), not in place.
+ENV PROBE_SELF_UPDATE=false
 ENTRYPOINT ["probe-agent"]

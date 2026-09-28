@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"probe-platform/internal/buildinfo"
 	"probe-platform/internal/protocol"
 )
 
@@ -32,6 +33,7 @@ type Hub struct {
 	cfg   Config
 	store *Store
 	geo   *GeoIP
+	files *AgentFiles // nil when self-update is disabled
 	log   *slog.Logger
 
 	mu     sync.RWMutex
@@ -42,11 +44,12 @@ type Hub struct {
 }
 
 // NewHub creates a hub and starts its background janitor.
-func NewHub(cfg Config, store *Store, geo *GeoIP, log *slog.Logger) *Hub {
+func NewHub(cfg Config, store *Store, geo *GeoIP, files *AgentFiles, log *slog.Logger) *Hub {
 	h := &Hub{
 		cfg:    cfg,
 		store:  store,
 		geo:    geo,
+		files:  files,
 		log:    log,
 		agents: map[string]*agentConn{},
 		tasks:  map[string]*taskRun{},
@@ -229,8 +232,33 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go h.writeLoop(ac)
+	h.offerUpdate(ac, hello)
 	h.readLoop(ac)
 	h.unregister(ac)
+}
+
+// offerUpdate tells an agent to fetch the server's bundled build when the
+// versions differ. Both sides must be real builds ("dev" never triggers).
+func (h *Hub) offerUpdate(ac *agentConn, hello protocol.Hello) {
+	if h.files == nil || !hello.SelfUpdate {
+		return
+	}
+	sv := buildinfo.Version
+	if sv == "" || sv == "dev" || hello.Version == "" || hello.Version == "dev" || hello.Version == sv {
+		return
+	}
+	f := h.files.Lookup(hello.OS, hello.Arch, hello.Variant)
+	if f == nil {
+		h.log.Info("agent outdated but no bundled binary for its platform", "agent", ac.id, "os", hello.OS, "arch", hello.Arch, "variant", hello.Variant)
+		return
+	}
+	msg, err := protocol.NewMessage(protocol.MsgUpdate, protocol.Update{Version: sv, Path: "/api/agent/download/" + f.Key, SHA256: f.SHA256, Size: f.Size})
+	if err != nil {
+		return
+	}
+	if ac.trySend(msg) {
+		h.log.Info("offered self-update", "agent", ac.id, "from", hello.Version, "to", sv, "platform", f.Key)
+	}
 }
 
 func (h *Hub) lookupAgentGeo(ac *agentConn, ip string) {

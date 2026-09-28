@@ -60,7 +60,8 @@ func main() {
 	defer store.Close()
 
 	geo := server.NewGeoIP(cfg, log)
-	hub := server.NewHub(cfg, store, geo, log)
+	files := server.NewAgentFiles(cfg.AgentsDir, log)
+	hub := server.NewHub(cfg, store, geo, files, log)
 	handler := server.NewHandler(cfg, hub, store, web.Dist(), log)
 
 	srv := &http.Server{

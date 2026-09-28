@@ -44,7 +44,17 @@ const (
 	MsgWelcome = "welcome"
 	MsgTask    = "task"
 	MsgCancel  = "cancel"
+	MsgUpdate  = "update"
 )
+
+// Update tells an agent that the server ships a different agent build for
+// its platform. Path is relative to the server's HTTP root.
+type Update struct {
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+}
 
 // NewMessage marshals payload into a Message.
 func NewMessage(typ string, payload any) (Message, error) {
@@ -70,6 +80,10 @@ type Hello struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	// MaxConcurrency is how many tasks the agent will run in parallel.
 	MaxConcurrency int `json:"max_concurrency,omitempty"`
+	// Variant is the CPU variant for GOARCH=arm builds ("v6", "v7").
+	Variant string `json:"variant,omitempty"`
+	// SelfUpdate reports whether the agent acts on MsgUpdate.
+	SelfUpdate bool `json:"self_update"`
 }
 
 // Welcome is the server's reply to Hello.

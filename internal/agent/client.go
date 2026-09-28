@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,17 +36,23 @@ type Config struct {
 	MaxConcurrency int
 	InsecureTLS    bool
 	Version        string
+	Variant        string // CPU variant for arm builds ("v7"), from buildinfo
+	SelfUpdate     bool   // act on update offers from the server
 }
 
 // Client is a running agent.
 type Client struct {
-	cfg  Config
-	log  *slog.Logger
-	caps []string
+	cfg      Config
+	log      *slog.Logger
+	caps     []string
+	httpBase string // http(s)://host[/prefix] derived from the WebSocket URL
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
 	sem     chan struct{}
+
+	updating       atomic.Bool
+	updateFailedAt time.Time
 }
 
 // New validates cfg and prepares a client.
@@ -76,6 +83,11 @@ func New(cfg Config, log *slog.Logger) (*Client, error) {
 		u.Path = "/ws/agent"
 	}
 	cfg.Server = u.String()
+	base := *u
+	base.Scheme = map[string]string{"ws": "http", "wss": "https"}[u.Scheme]
+	base.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/ws/agent")
+	base.RawQuery, base.Fragment = "", ""
+	httpBase := strings.TrimSuffix(base.String(), "/")
 	if cfg.Name == "" {
 		cfg.Name, _ = os.Hostname()
 	}
@@ -89,11 +101,12 @@ func New(cfg Config, log *slog.Logger) (*Client, error) {
 		cfg.Version = "dev"
 	}
 	return &Client{
-		cfg:     cfg,
-		log:     log,
-		caps:    probe.DetectCapabilities(),
-		running: map[string]context.CancelFunc{},
-		sem:     make(chan struct{}, cfg.MaxConcurrency),
+		cfg:      cfg,
+		log:      log,
+		caps:     probe.DetectCapabilities(),
+		httpBase: httpBase,
+		running:  map[string]context.CancelFunc{},
+		sem:      make(chan struct{}, cfg.MaxConcurrency),
 	}, nil
 }
 
@@ -154,6 +167,8 @@ func (c *Client) session(ctx context.Context) error {
 		Tags:           c.cfg.Tags,
 		Capabilities:   c.caps,
 		MaxConcurrency: c.cfg.MaxConcurrency,
+		Variant:        c.cfg.Variant,
+		SelfUpdate:     c.cfg.SelfUpdate,
 	})
 	if err != nil {
 		return err
@@ -238,6 +253,11 @@ func (c *Client) handle(ctx context.Context, m protocol.Message, send chan<- pro
 			return
 		}
 		go c.runTask(ctx, t, send)
+	case protocol.MsgUpdate:
+		var u protocol.Update
+		if err := json.Unmarshal(m.Payload, &u); err == nil {
+			go c.maybeUpdate(ctx, u)
+		}
 	case protocol.MsgCancel:
 		var p struct {
 			TaskID string `json:"task_id"`

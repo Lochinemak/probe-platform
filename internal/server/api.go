@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,12 +29,13 @@ type API struct {
 	store  *Store
 	auth   *sessionAuth
 	static fs.FS
+	files  *AgentFiles
 	log    *slog.Logger
 }
 
 // NewHandler wires every route.
 func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logger) http.Handler {
-	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(cfg.AdminPassword), static: static, log: log}
+	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(cfg.AdminPassword), static: static, files: hub.files, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/agent", hub.HandleAgentWS)
 	mux.HandleFunc("GET /api/health", a.health)
@@ -44,6 +49,9 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logg
 	mux.Handle("GET /api/tasks/{id}", a.protect(a.getTask))
 	mux.Handle("GET /api/tasks/{id}/events", a.protect(a.taskEvents))
 	mux.Handle("POST /api/tasks/{id}/cancel", a.protect(a.cancelTask))
+	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
+	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
+	mux.HandleFunc("GET /install-agent.sh", a.installScript)
 	mux.Handle("/", a.spaHandler())
 	return a.recoverer(mux)
 }
@@ -78,6 +86,78 @@ func (a *API) protect(next http.HandlerFunc) http.Handler {
 		}
 		next(w, r)
 	})
+}
+
+// hasAgentToken accepts the shared agent secret as a bearer token.
+func (a *API) hasAgentToken(r *http.Request) bool {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") || a.cfg.AgentToken == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, "Bearer ")), []byte(a.cfg.AgentToken)) == 1
+}
+
+// protectAgentOrSession allows either a logged-in dashboard user or an agent.
+func (a *API) protectAgentOrSession(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.hasAgentToken(r) && !a.auth.authenticated(r) {
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next(w, r)
+	})
+}
+
+var agentKeyRe = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`)
+
+// agentVersion lists the agent binaries bundled with this server.
+func (a *API) agentVersion(w http.ResponseWriter, _ *http.Request) {
+	files := []*AgentFile{}
+	if a.files != nil {
+		files = a.files.List()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"version": buildinfo.Version, "files": files})
+}
+
+// agentDownload streams one agent binary, e.g. /api/agent/download/linux-arm64.
+func (a *API) agentDownload(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if a.files == nil || !agentKeyRe.MatchString(key) {
+		writeErr(w, http.StatusNotFound, "no agent binaries available")
+		return
+	}
+	af := a.files.ByKey(key)
+	if af == nil {
+		writeErr(w, http.StatusNotFound, "no agent binary for "+key)
+		return
+	}
+	fh, err := a.files.Open(af)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer fh.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+af.Name+"\"")
+	w.Header().Set("X-Checksum-Sha256", af.SHA256)
+	w.Header().Set("X-Agent-Version", buildinfo.Version)
+	http.ServeContent(w, r, af.Name, af.modTime, fh)
+}
+
+// installScript serves deploy/install-agent.sh from the agents dir so a new
+// node can be onboarded with `curl .../install-agent.sh | sudo sh`.
+func (a *API) installScript(w http.ResponseWriter, _ *http.Request) {
+	if a.files == nil {
+		http.Error(w, "not available", http.StatusNotFound)
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(a.files.Dir(), "install-agent.sh"))
+	if err != nil {
+		http.Error(w, "not available", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	_, _ = w.Write(b)
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {

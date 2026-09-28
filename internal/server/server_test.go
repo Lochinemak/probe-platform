@@ -161,7 +161,7 @@ func TestAPIAuthGate(t *testing.T) {
 	}
 	defer st.Close()
 	cfg := Config{AdminPassword: "pw", AgentToken: "tok", TaskTimeout: time.Minute}
-	hub := NewHub(cfg, st, nil, discardLogger())
+	hub := NewHub(cfg, st, nil, nil, discardLogger())
 	h := NewHandler(cfg, hub, st, emptyFS{}, discardLogger())
 	srv := httptest.NewServer(h)
 	defer srv.Close()

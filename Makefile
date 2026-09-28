@@ -31,7 +31,7 @@ agents-all:
 		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		out=$(BIN)/probe-agent-$$os-$$arch$$suffix$$ext; \
 		echo "  -> $$out"; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $$out ./cmd/agent || exit 1; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm go build $(GOFLAGS) -ldflags "$(LDFLAGS) -X probe-platform/internal/buildinfo.Variant=$$suffix" -o $$out ./cmd/agent || exit 1; \
 	done
 	@for t in linux/amd64 linux/arm64; do \
 		os=$${t%%/*}; arch=$${t#*/}; \
@@ -47,7 +47,7 @@ docker:
 
 ## run-server / run-agent: local development
 run-server:
-	go run ./cmd/server --data ./data --log-level debug
+	go run ./cmd/server --data ./data --log-level debug --agents-dir ./bin
 
 run-agent:
 	go run ./cmd/agent --server http://localhost:8080 --token "$$(cat data/agent_token)" --name dev-local --location 本机 --isp 开发 --log-level debug

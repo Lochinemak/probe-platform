@@ -67,7 +67,7 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
 
     <template v-else>
       <ProbeView v-show="tab === 'probe'" @open-history="openHistory" />
-      <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" />
+      <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" />
       <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" />
     </template>
   </div>

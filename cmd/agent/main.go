@@ -10,7 +10,7 @@
 //
 // Every flag can also be given as an environment variable: PROBE_SERVER,
 // PROBE_TOKEN, PROBE_NAME, PROBE_LOCATION, PROBE_ISP, PROBE_TAGS,
-// PROBE_CONCURRENCY, PROBE_INSECURE, PROBE_LOG_LEVEL.
+// PROBE_CONCURRENCY, PROBE_INSECURE, PROBE_SELF_UPDATE, PROBE_LOG_LEVEL.
 package main
 
 import (
@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -59,6 +60,7 @@ func main() {
 	tags := fs.String("tags", envOr("PROBE_TAGS", ""), "comma separated tags")
 	conc := fs.Int("concurrency", atoiOr(envOr("PROBE_CONCURRENCY", ""), 4), "max concurrent tasks")
 	insecure := fs.Bool("insecure", envOr("PROBE_INSECURE", "") == "true", "skip TLS certificate verification")
+	selfUpdate := fs.Bool("self-update", envOr("PROBE_SELF_UPDATE", "true") != "false", "replace this binary when the server ships a different version")
 	logLevel := fs.String("log-level", envOr("PROBE_LOG_LEVEL", "info"), "debug|info|warn|error")
 	_ = fs.Parse(os.Args[1:])
 
@@ -79,6 +81,8 @@ func main() {
 		MaxConcurrency: *conc,
 		InsecureTLS:    *insecure,
 		Version:        buildinfo.Version,
+		Variant:        buildinfo.Variant,
+		SelfUpdate:     *selfUpdate,
 	}, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -86,7 +90,7 @@ func main() {
 		os.Exit(2)
 	}
 	caps := cli.Capabilities()
-	log.Info("probe-agent starting", "version", buildinfo.Version, "capabilities", strings.Join(caps, ","))
+	log.Info("probe-agent starting", "version", buildinfo.Version, "arch", runtime.GOOS+"/"+runtime.GOARCH+buildinfo.Variant, "self_update", *selfUpdate, "capabilities", strings.Join(caps, ","))
 	if !contains(caps, "icmp_raw") {
 		log.Warn("no raw ICMP socket: mtr unavailable and ping may fail; run as root, use setcap cap_net_raw+ep, or docker --cap-add NET_RAW")
 	}

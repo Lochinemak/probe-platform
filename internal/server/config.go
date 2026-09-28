@@ -23,6 +23,7 @@ type Config struct {
 	RetainDays    int           // history retention; 0 keeps forever
 	LogLevel      string
 	AgentImage    string // agent docker image shown on the dashboard's onboarding page
+	AgentsDir     string // directory with probe-agent-<os>-<arch> binaries served for self-update
 }
 
 func envOr(key, def string) string {
@@ -65,6 +66,7 @@ func LoadConfig(args []string) Config {
 	timeout := fs.Int("task-timeout", envInt("PROBE_TASK_TIMEOUT", 180), "seconds before an unfinished task is failed")
 	fs.IntVar(&c.RetainDays, "retain-days", envInt("PROBE_RETAIN_DAYS", 90), "delete task history older than this many days (0 = keep)")
 	fs.StringVar(&c.LogLevel, "log-level", envOr("PROBE_LOG_LEVEL", "info"), "debug|info|warn|error")
+	fs.StringVar(&c.AgentsDir, "agents-dir", envOr("PROBE_AGENTS_DIR", ""), "directory of probe-agent-<os>-<arch> binaries to serve for agent self-update (empty = disabled)")
 	fs.StringVar(&c.AgentImage, "agent-image", envOr("PROBE_AGENT_IMAGE", "ghcr.io/lochinemak/probe-agent:latest"), "agent image name shown in the dashboard's install instructions (use a registry mirror here if needed)")
 	_ = fs.Parse(args)
 	c.TaskTimeout = time.Duration(*timeout) * time.Second

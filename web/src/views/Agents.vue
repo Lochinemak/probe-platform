@@ -3,9 +3,19 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
 
-const props = defineProps({ agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' } })
+const props = defineProps({
+  agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' },
+  serverVersion: { type: String, default: '' },
+})
 const agents = ref([])
 const error = ref('')
+const downloads = ref([])
+function outdated(a) {
+  return a.version && props.serverVersion && a.version !== 'dev' && props.serverVersion !== 'dev' && a.version !== props.serverVersion
+}
+async function loadDownloads() {
+  try { downloads.value = (await api.agentFiles()).files || [] } catch { downloads.value = [] }
+}
 let timer = null
 async function load() {
   try { agents.value = (await api.agents()).agents } catch (e) { if (e.status !== 401) error.value = e.message }
@@ -16,7 +26,7 @@ async function remove(a) {
 }
 const online = computed(() => agents.value.filter((a) => a.online).length)
 const serverURL = computed(() => `${location.protocol}//${location.host}`)
-onMounted(() => { load(); timer = setInterval(load, 5000) })
+onMounted(() => { load(); loadDownloads(); timer = setInterval(load, 5000) })
 onBeforeUnmount(() => clearInterval(timer))
 </script>
 
@@ -40,7 +50,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <td>{{ a.isp || a.geo_isp || '-' }}<div class="sub" v-if="a.isp && a.geo_isp && a.isp !== a.geo_isp">{{ a.geo_isp }}</div></td>
               <td class="mono">{{ a.public_ip || '-' }}</td>
               <td class="sub">{{ a.os }}/{{ a.arch }}</td>
-              <td class="sub">{{ a.version }}</td>
+              <td class="sub">{{ a.version }} <span v-if="outdated(a)" class="badge warn" title="与服务端版本不一致，节点重连后会自动更新">待更新</span></td>
               <td>
                 <span v-for="c in a.capabilities" :key="c" class="badge" :class="{ ok: c === 'icmp_raw' || c === 'mtr' }" style="margin-right:4px">{{ c }}</span>
                 <span v-if="a.capabilities && !a.capabilities.includes('mtr')" class="badge warn" title="没有 raw socket 权限，MTR 不可用">无 MTR</span>
@@ -59,7 +69,16 @@ onBeforeUnmount(() => clearInterval(timer))
       <h3>接入新节点</h3>
       <p class="sub">在腾讯云服务器、家里的 NAS（x86 / ARM）上运行 agent，它会主动连接本服务器，无需公网 IP 或端口映射。Token 在服务器 <code>data/agent_token</code> 文件（或 <code>PROBE_AGENT_TOKEN</code>）中。</p>
       <details open>
-        <summary>Docker（推荐，群晖 / QNAP / Unraid 均可）</summary>
+        <summary>Linux + systemd 一条命令（推荐；之后随 dashboard 自动更新）</summary>
+        <pre class="cmd">curl -fsSL {{ serverURL }}/install-agent.sh | sudo \
+  PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; \
+  PROBE_NAME=home-shenzhen PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh</pre>
+        <p class="sub" v-if="downloads.length">本服务端自带的 agent 二进制（v{{ serverVersion }}）：
+          <a v-for="f in downloads" :key="f.key" :href="'/api/agent/download/' + f.key" style="margin-right:10px">{{ f.key }}</a>
+        </p>
+      </details>
+      <details>
+        <summary>Docker（群晖 / QNAP / Unraid 均可，升级靠拉新镜像）</summary>
         <pre class="cmd">docker run -d --name probe-agent --restart unless-stopped \
   --network host --cap-add NET_RAW \
   -e PROBE_SERVER={{ serverURL }} \
@@ -68,23 +87,16 @@ onBeforeUnmount(() => clearInterval(timer))
   {{ props.agentImage }}</pre>
       </details>
       <details>
-        <summary>二进制 + systemd（Linux amd64 / arm64 / armv7）</summary>
-        <pre class="cmd">sudo install -m755 probe-agent-linux-&lt;arch&gt; /usr/local/bin/probe-agent
-sudo setcap cap_net_raw+ep /usr/local/bin/probe-agent   # 让 ping / mtr 不需要 root
-sudo tee /etc/probe-agent.env &gt;/dev/null &lt;&lt;'ENV'
-PROBE_SERVER={{ serverURL }}
-PROBE_TOKEN=&lt;agent token&gt;
-PROBE_NAME=tencent-gz
-PROBE_LOCATION=广东 广州
-PROBE_ISP=腾讯云
-ENV
-sudo cp deploy/probe-agent.service /etc/systemd/system/
-sudo systemctl enable --now probe-agent</pre>
+        <summary>手动：先下载再安装</summary>
+        <pre class="cmd">curl -fsSL -H "Authorization: Bearer &lt;agent token&gt;" {{ serverURL }}/api/agent/download/linux-arm64 -o probe-agent
+curl -fsSL {{ serverURL }}/install-agent.sh -o install-agent.sh
+sudo PROBE_SERVER={{ serverURL }} PROBE_TOKEN=&lt;agent token&gt; PROBE_NAME=nas-1 sh install-agent.sh ./probe-agent</pre>
       </details>
       <details>
         <summary>先在本机验证探测能力</summary>
         <pre class="cmd">probe-agent test www.qq.com          # 依次跑 ping / tcping / http / mtr
-probe-agent test mtr 1.1.1.1</pre>
+probe-agent test mtr 1.1.1.1
+# 已用 systemd 安装的机器上：sudo /var/lib/probe-agent/probe-agent test www.qq.com</pre>
       </details>
     </div>
   </div>
