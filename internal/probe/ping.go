@@ -45,8 +45,15 @@ func Ping(ctx context.Context, target string, p protocol.Params, progress Progre
 	return res, err
 }
 
+// isPermissionError is true only for failures to *open* the ICMP socket
+// ("listen ip4:icmp ...: socket: operation not permitted"). A sendto that is
+// refused by routing (e.g. a prohibited fake-IP route) also says "permission
+// denied" but is not something a privilege change would fix.
 func isPermissionError(err error) bool {
 	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "sendto") || strings.Contains(s, "write ") {
+		return false
+	}
 	return strings.Contains(s, "operation not permitted") ||
 		strings.Contains(s, "permission denied") ||
 		strings.Contains(s, "socket: protocol not supported")

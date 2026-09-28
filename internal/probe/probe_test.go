@@ -3,8 +3,10 @@ package probe
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +55,35 @@ func TestComputeStats(t *testing.T) {
 	empty := ComputeStats(3, nil)
 	if empty.LossPct != 100 || empty.Received != 0 {
 		t.Fatalf("empty: %+v", empty)
+	}
+}
+
+func TestFakeIPDetection(t *testing.T) {
+	for _, s := range []string{"198.18.0.1", "198.18.3.6", "198.19.255.254"} {
+		if !IsFakeIP(net.ParseIP(s)) {
+			t.Fatalf("%s should be fake-IP", s)
+		}
+	}
+	for _, s := range []string{"198.17.255.255", "198.20.0.0", "223.5.5.5", "2001:db8::1"} {
+		if IsFakeIP(net.ParseIP(s)) {
+			t.Fatalf("%s should not be fake-IP", s)
+		}
+	}
+	// A literal fake-IP target is allowed (the user asked for it explicitly).
+	if _, err := Resolve(context.Background(), "198.18.3.6", ""); err != nil {
+		t.Fatalf("literal fake-IP: %v", err)
+	}
+	if !strings.Contains(FakeIPError("www.qq.com", net.ParseIP("198.18.3.6")).Error(), "fake-IP 198.18.3.6") {
+		t.Fatal("error text must name the address")
+	}
+}
+
+func TestIsPermissionError(t *testing.T) {
+	if !isPermissionError(errors.New("listen ip4:icmp 0.0.0.0: socket: operation not permitted")) {
+		t.Fatal("socket open failure must count")
+	}
+	if isPermissionError(errors.New("write ip4 0.0.0.0->198.18.3.6: sendto: permission denied")) {
+		t.Fatal("a refused sendto is not a privilege problem")
 	}
 }
 

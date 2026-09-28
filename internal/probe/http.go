@@ -45,6 +45,11 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
+	// Resolve up front purely to reject fake-IP answers; the HTTP client does
+	// its own lookup for the request itself.
+	if _, err := Resolve(ctx, u.Hostname(), p.IPVersion); err != nil {
+		return nil, err
+	}
 
 	res := &protocol.HTTPResult{URL: u.String()}
 	var rtts []float64

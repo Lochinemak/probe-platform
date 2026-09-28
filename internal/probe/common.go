@@ -37,8 +37,24 @@ func ms(d time.Duration) float64 {
 	return math.Round(float64(d)/float64(time.Millisecond)*1000) / 1000
 }
 
+// fakeIPNet is the range fake-IP DNS modes (Clash / OpenClash / mihomo, and
+// RFC 2544 benchmarking) hand out. A hostname resolving here means the
+// node's DNS is hijacked by a transparent proxy and any measurement would be
+// of the proxy, not the network.
+var fakeIPNet = &net.IPNet{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)}
+
+// IsFakeIP reports whether ip lies in 198.18.0.0/15.
+func IsFakeIP(ip net.IP) bool { return ip != nil && fakeIPNet.Contains(ip) }
+
+// FakeIPError explains a fake-IP resolution to the dashboard user.
+func FakeIPError(host string, ip net.IP) error {
+	return fmt.Errorf("%s 解析为 fake-IP %s：本节点的 DNS 被透明代理（OpenClash fake-ip 等）劫持，探测结果无意义；请按 README「OpenClash」一节让节点绕过代理并使用上游 DNS", host, ip)
+}
+
 // Resolve turns host into a single IP honouring the requested IP version
 // ("", "4" or "6"). Plain IP literals are validated against the version.
+// Hostnames that resolve into the fake-IP range are rejected with a
+// FakeIPError; literal 198.18.x.x targets are allowed.
 func Resolve(ctx context.Context, host, ipVersion string) (net.IP, error) {
 	host = strings.TrimSpace(host)
 	host = strings.Trim(host, "[]")
@@ -71,16 +87,21 @@ func Resolve(ctx context.Context, host, ipVersion string) (net.IP, error) {
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("resolve %s: no address", host)
 	}
+	chosen := ips[0]
 	if ipVersion == "" {
 		// Prefer IPv4 when the caller has no preference; most home networks
 		// still have better v4 connectivity.
 		for _, ip := range ips {
 			if ip.To4() != nil {
-				return ip, nil
+				chosen = ip
+				break
 			}
 		}
 	}
-	return ips[0], nil
+	if IsFakeIP(chosen) {
+		return nil, FakeIPError(host, chosen)
+	}
+	return chosen, nil
 }
 
 // SplitTarget separates "host:port" (or "[v6]:port") into host and port. If
