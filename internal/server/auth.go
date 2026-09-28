@@ -17,9 +17,13 @@ import (
 const (
 	sessionCookie = "probe_session"
 	oidcCookie    = "probe_oidc"
+	guestCookie   = "probe_guest"
 
 	roleAdmin = "admin"
 	roleGuest = "guest"
+
+	ownerAdminPrefix = "admin:"
+	ownerGuestPrefix = "guest:"
 )
 
 // Session is what the signed cookie carries.
@@ -146,6 +150,56 @@ func (s *sessionAuth) allowAttempt(ip string) bool {
 	}
 	s.attempts[ip] = append(recent, now)
 	return true
+}
+
+// --- task ownership --------------------------------------------------------
+
+// owner returns the task-owner string for a request: "admin:<name>" for
+// administrators (open mode counts as the configured admin user), "guest:<id>"
+// for a visitor carrying a guest cookie, "" for a visitor without one.
+func (s *sessionAuth) owner(r *http.Request) string {
+	if s.role(r) == roleAdmin {
+		name := s.settings.AdminUser()
+		if sess := s.sessionFrom(r); sess != nil && sess.Name != "" {
+			name = sess.Name
+		}
+		return ownerAdminPrefix + name
+	}
+	if id := guestIDFrom(r); id != "" {
+		return ownerGuestPrefix + id
+	}
+	return ""
+}
+
+// guestIDFrom returns the anonymous id from the guest cookie, or "" when the
+// cookie is missing or malformed. The id is 128 random bits, so it is not
+// signed: knowing someone else's id is as hard as guessing their task ids.
+func guestIDFrom(r *http.Request) string {
+	c, err := r.Cookie(guestCookie)
+	if err != nil || len(c.Value) != 32 {
+		return ""
+	}
+	for _, ch := range c.Value {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return ""
+		}
+	}
+	return c.Value
+}
+
+// ensureGuestOwner returns the visitor's guest owner string, minting the
+// cookie when they do not have one yet and refreshing its expiry otherwise so
+// a regular visitor keeps their history.
+func (s *sessionAuth) ensureGuestOwner(w http.ResponseWriter, r *http.Request) string {
+	id := guestIDFrom(r)
+	if id == "" {
+		id = randomHex(16)
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: guestCookie, Value: id, Path: "/", MaxAge: int((365 * 24 * time.Hour).Seconds()),
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureCookie(r),
+	})
+	return ownerGuestPrefix + id
 }
 
 func secureCookie(r *http.Request) bool {

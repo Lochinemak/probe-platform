@@ -182,7 +182,7 @@ agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为
 
 ## API
 
-所有接口返回 JSON；管理员接口需先 `POST /api/login {"username": "admin", "password": "..."}` 获取 Cookie（游客可直接调用拨测相关接口）。
+所有接口返回 JSON；管理员接口需先 `POST /api/login {"username": "admin", "password": "..."}` 获取 Cookie。游客可直接调用拨测相关接口，但 `GET /api/tasks`、`GET /api/tasks/{id}`（及 `/events`、`/cancel`）只对自己发起的任务有效：第一次 `POST /api/tasks` 会下发一枚 `probe_guest` Cookie，之后带着它请求才能看到这些记录。
 
 ```bash
 # 对所有在线节点做 tcping
@@ -255,8 +255,8 @@ deploy/                    Dockerfile、compose、systemd、安装脚本、反�
 登录相关的配置都在 Dashboard 的「设置」页（管理员可见）修改，保存后立即生效、无需重启；环境变量只作为首次启动的引导值，页面里保存过的项以数据库为准。
 
 - **未配置任何登录方式**（既没有密码也没有 Logto）：开放模式，所有人都是管理员，只适合内网。首次部署请用 `PROBE_ADMIN_PASSWORD` 提供一个引导密码，登录后在「设置 → 管理员密码」里改成自己的（保存为 bcrypt 哈希，之后环境变量里的密码就不再起作用，可以删掉）。
-- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果和历史，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
-- **管理员**：右上角「管理员登录」。两种方式：
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
+- **管理员**：右上角「管理员登录」。登录后「历史」页显示所有人的记录，并多一列「来源」（管理员用户名 / 游客 + 短 ID / 定时监控）。两种方式：
   - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
   - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和可选的管理员名单（逗号分隔的邮箱 / 用户名 / sub，留空表示该 Logto 的任何用户都是管理员），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
 - 对应的引导环境变量：`PROBE_ADMIN_USER`、`PROBE_ADMIN_PASSWORD`、`PROBE_GUEST`、`PROBE_LOGTO_ENDPOINT`、`PROBE_LOGTO_APP_ID`、`PROBE_LOGTO_APP_SECRET`、`PROBE_LOGTO_ADMINS`、`PROBE_BASE_URL`、`PROBE_AGENT_IMAGE`。

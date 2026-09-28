@@ -142,6 +142,11 @@ type Task struct {
 	AgentIDs []string `json:"agent_ids,omitempty"`
 	// MonitorID is set when the task was created by a scheduled monitor.
 	MonitorID string `json:"monitor_id,omitempty"`
+	// Owner identifies who started the task: "admin:<name>" for a logged-in
+	// administrator, "guest:<id>" for an anonymous visitor (the id lives in a
+	// long-lived cookie), "" for scheduled monitor runs. Guests only ever see
+	// tasks with their own owner; agents never receive it.
+	Owner string `json:"owner,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

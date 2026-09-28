@@ -473,14 +473,18 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "too many agents")
 		return
 	}
+	owner := a.auth.owner(r)
 	if a.auth.role(r) == roleGuest {
 		if !guestLimiter.allowAttempt(clientIP(r, a.cfg.TrustProxy)) {
 			writeErr(w, http.StatusTooManyRequests, "游客每分钟最多发起 10 次拨测，请稍后再试或登录")
 			return
 		}
 		req.Params = guestParams(req.Type, req.Params)
+		// The cookie has to exist before the browser opens the event stream,
+		// so mint it here rather than on the first page load.
+		owner = a.auth.ensureGuestOwner(w, r)
 	}
-	snap, err := a.hub.CreateTask(req.Type, req.Target, req.Params, req.AgentIDs)
+	snap, err := a.hub.CreateTask(req.Type, req.Target, req.Params, req.AgentIDs, owner)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -488,10 +492,31 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, snap)
 }
 
+// canSeeTask reports whether the request may read task: administrators see
+// everything, guests only what their own browser started.
+func (a *API) canSeeTask(r *http.Request, task *protocol.Task) bool {
+	if a.auth.isAdmin(r) {
+		return true
+	}
+	owner := a.auth.owner(r)
+	return owner != "" && task.Owner == owner
+}
+
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	tasks, err := a.store.ListTasks(limit, offset, r.URL.Query().Get("monitor"))
+	filter := TaskFilter{MonitorID: r.URL.Query().Get("monitor")}
+	if !a.auth.isAdmin(r) {
+		// Guests: only their own ad-hoc probes. A visitor without a guest
+		// cookie has not started anything yet.
+		filter.Owner = a.auth.owner(r)
+		filter.MonitorID = ""
+		if filter.Owner == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"tasks": []*protocol.Task{}})
+			return
+		}
+	}
+	tasks, err := a.store.ListTasks(limit, offset, filter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -501,7 +526,7 @@ func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) getTask(w http.ResponseWriter, r *http.Request) {
 	snap, err := a.hub.LoadTask(r.PathValue("id"))
-	if errors.Is(err, ErrNotFound) {
+	if errors.Is(err, ErrNotFound) || (err == nil && !a.canSeeTask(r, snap.Task)) {
 		writeErr(w, http.StatusNotFound, "task not found")
 		return
 	}
@@ -513,7 +538,12 @@ func (a *API) getTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) cancelTask(w http.ResponseWriter, r *http.Request) {
-	if !a.hub.CancelTask(r.PathValue("id")) {
+	id := r.PathValue("id")
+	if snap, err := a.hub.LoadTask(id); err != nil || !a.canSeeTask(r, snap.Task) {
+		writeErr(w, http.StatusNotFound, "task not running")
+		return
+	}
+	if !a.hub.CancelTask(id) {
 		writeErr(w, http.StatusNotFound, "task not running")
 		return
 	}
@@ -552,7 +582,7 @@ func (a *API) taskEvents(w http.ResponseWriter, r *http.Request) {
 	snap, events, unsub, live := a.hub.Subscribe(id)
 	if !live {
 		loaded, err := a.hub.LoadTask(id)
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, ErrNotFound) || (err == nil && !a.canSeeTask(r, loaded.Task)) {
 			writeErr(w, http.StatusNotFound, "task not found")
 			return
 		}
@@ -566,6 +596,10 @@ func (a *API) taskEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unsub()
+	if !a.canSeeTask(r, snap.Task) {
+		writeErr(w, http.StatusNotFound, "task not found")
+		return
+	}
 	headers()
 	if err := send(snap); err != nil {
 		return

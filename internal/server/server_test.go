@@ -1,9 +1,12 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -184,7 +187,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Status != protocol.StatusDone || string(list[0].Data) != `{"ip":"1.1.1.1"}` {
 		t.Fatalf("results: %v %+v", err, list)
 	}
-	tasks, err := st.ListTasks(10, 0, "")
+	tasks, err := st.ListTasks(10, 0, TaskFilter{})
 	if err != nil || len(tasks) != 1 || tasks[0].Params.Count != 3 {
 		t.Fatalf("tasks: %v %+v", err, tasks)
 	}
@@ -256,5 +259,216 @@ func TestPublicAgentTrimsDetails(t *testing.T) {
 	gp := guestParams(protocol.TaskHTTP, protocol.Params{Count: 20, SpeedTest: true})
 	if gp.Count != 3 || gp.SpeedTest {
 		t.Fatalf("guest http params: %+v", gp)
+	}
+}
+
+// TestMigrateTasksOwner opens a database created by the first release (tasks
+// without monitor_id/owner) and checks both columns get added.
+func TestMigrateTasksOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`CREATE TABLE tasks (id TEXT PRIMARY KEY, type TEXT NOT NULL, target TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}', agent_ids TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
+		INSERT INTO tasks (id,type,target,created_at) VALUES ('old1','ping','1.1.1.1',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	old, err := st.GetTask("old1")
+	if err != nil || old.Owner != "" || old.MonitorID != "" {
+		t.Fatalf("old row after migration: %v %+v", err, old)
+	}
+	if err := st.InsertTask(&protocol.Task{ID: "g1", Type: protocol.TaskPing, Target: "1.1.1.1", CreatedAt: time.Now(), Owner: "guest:abc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertTask(&protocol.Task{ID: "a1", Type: protocol.TaskPing, Target: "1.1.1.1", CreatedAt: time.Now(), Owner: "admin:root"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertTask(&protocol.Task{ID: "m1", Type: protocol.TaskPing, Target: "1.1.1.1", CreatedAt: time.Now(), MonitorID: "mon"}); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := st.ListTasks(10, 0, TaskFilter{MonitorID: "*"})
+	if len(all) != 4 {
+		t.Fatalf("all: %d", len(all))
+	}
+	adhoc, _ := st.ListTasks(10, 0, TaskFilter{})
+	if len(adhoc) != 3 {
+		t.Fatalf("ad-hoc: %d", len(adhoc))
+	}
+	mine, _ := st.ListTasks(10, 0, TaskFilter{Owner: "guest:abc"})
+	if len(mine) != 1 || mine[0].ID != "g1" || mine[0].Owner != "guest:abc" {
+		t.Fatalf("guest filter: %+v", mine)
+	}
+	// Reopening must be a no-op (columns already there).
+	st.Close()
+	if st2, err := OpenStore(path); err != nil {
+		t.Fatal(err)
+	} else {
+		st2.Close()
+	}
+}
+
+func TestGuestOwnerCookie(t *testing.T) {
+	for _, v := range []string{"", "short", strings.Repeat("g", 32), strings.Repeat("A", 32), "../" + strings.Repeat("a", 29)} {
+		r := httptest.NewRequest("GET", "/", nil)
+		if v != "" {
+			r.AddCookie(&http.Cookie{Name: guestCookie, Value: v})
+		}
+		if guestIDFrom(r) != "" {
+			t.Fatalf("accepted bad guest id %q", v)
+		}
+	}
+	good := strings.Repeat("0f", 16)
+	r := httptest.NewRequest("GET", "/", nil)
+	r.AddCookie(&http.Cookie{Name: guestCookie, Value: good})
+	if guestIDFrom(r) != good {
+		t.Fatal("rejected valid guest id")
+	}
+	// Open mode: everyone is the configured admin user.
+	st, _ := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	defer st.Close()
+	a := newSessionAuth(mustSettings(t, st, Config{AdminUser: "root"}))
+	if got := a.owner(r); got != "admin:root" {
+		t.Fatalf("open-mode owner: %q", got)
+	}
+}
+
+// TestGuestHistoryIsolation: guests only list and open what their own browser
+// started; administrators see everything.
+func TestGuestHistoryIsolation(t *testing.T) {
+	st, err := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := Config{AdminPassword: "pw", AdminUser: "admin", AgentToken: "tok", TaskTimeout: time.Minute, GuestAccess: true}
+	hub := NewHub(cfg, st, nil, nil, discardLogger())
+	srv := httptest.NewServer(NewHandler(cfg, hub, st, emptyFS{}, mustSettings(t, st, cfg), nil, nil, discardLogger()))
+	defer srv.Close()
+
+	client := func() *http.Client {
+		jar, _ := cookiejar.New(nil)
+		return &http.Client{Jar: jar}
+	}
+	get := func(c *http.Client, path string) (int, map[string]any) {
+		resp, err := c.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		return resp.StatusCode, body
+	}
+	post := func(c *http.Client, path, body string) (int, map[string]any) {
+		resp, err := c.Post(srv.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	taskIDs := func(body map[string]any) []string {
+		var ids []string
+		for _, x := range body["tasks"].([]any) {
+			ids = append(ids, x.(map[string]any)["id"].(string))
+		}
+		return ids
+	}
+	// The agent is offline, so the task finishes immediately with errors —
+	// enough to exercise ownership without a WebSocket.
+	const probe = `{"type":"ping","target":"1.1.1.1","agent_ids":["a1"]}`
+
+	guestA, guestB, admin := client(), client(), client()
+	code, snap := post(guestA, "/api/tasks", probe)
+	if code != http.StatusCreated {
+		t.Fatalf("guest create: %d %v", code, snap)
+	}
+	taskA := snap["task"].(map[string]any)["id"].(string)
+	if owner, _ := snap["task"].(map[string]any)["owner"].(string); !strings.HasPrefix(owner, "guest:") {
+		t.Fatalf("guest task owner: %q", owner)
+	}
+	u, _ := url.Parse(srv.URL)
+	var guestID string
+	for _, c := range guestA.Jar.Cookies(u) {
+		if c.Name == guestCookie {
+			guestID = c.Value
+		}
+	}
+	if len(guestID) != 32 {
+		t.Fatalf("guest cookie not set: %q", guestID)
+	}
+
+	// Guest A sees their task in the list and can open it.
+	if code, body := get(guestA, "/api/tasks"); code != 200 || len(taskIDs(body)) != 1 || taskIDs(body)[0] != taskA {
+		t.Fatalf("guest A list: %d %v", code, body)
+	}
+	if code, _ := get(guestA, "/api/tasks/"+taskA); code != 200 {
+		t.Fatalf("guest A get own: %d", code)
+	}
+	// Asking for monitor runs must not widen a guest's view.
+	if code, body := get(guestA, "/api/tasks?monitor=*"); code != 200 || len(taskIDs(body)) != 1 {
+		t.Fatalf("guest A list monitor=*: %d %v", code, body)
+	}
+
+	// Guest B (no cookie yet) sees nothing and cannot open A's task by id.
+	if code, body := get(guestB, "/api/tasks"); code != 200 || len(taskIDs(body)) != 0 {
+		t.Fatalf("guest B list: %d %v", code, body)
+	}
+	for _, p := range []string{"/api/tasks/" + taskA, "/api/tasks/" + taskA + "/events"} {
+		if code, _ := get(guestB, p); code != http.StatusNotFound {
+			t.Fatalf("guest B %s: %d", p, code)
+		}
+	}
+	if code, _ := post(guestB, "/api/tasks/"+taskA+"/cancel", ""); code != http.StatusNotFound {
+		t.Fatalf("guest B cancel: %d", code)
+	}
+	// Guest B starts their own; still only sees that one.
+	code, snap = post(guestB, "/api/tasks", probe)
+	if code != http.StatusCreated {
+		t.Fatalf("guest B create: %d", code)
+	}
+	taskB := snap["task"].(map[string]any)["id"].(string)
+	if code, body := get(guestB, "/api/tasks"); code != 200 || len(taskIDs(body)) != 1 || taskIDs(body)[0] != taskB {
+		t.Fatalf("guest B list after create: %d %v", code, body)
+	}
+	if code, _ := get(guestB, "/api/tasks/"+taskA); code != http.StatusNotFound {
+		t.Fatalf("guest B get A's task: %d", code)
+	}
+	// A second task from guest A reuses the same cookie.
+	post(guestA, "/api/tasks", probe)
+	if code, body := get(guestA, "/api/tasks"); code != 200 || len(taskIDs(body)) != 2 {
+		t.Fatalf("guest A list after second: %d %v", code, body)
+	}
+
+	// Admin sees all three and can open a guest's task.
+	if code, _ := post(admin, "/api/login", `{"username":"admin","password":"pw"}`); code != 200 {
+		t.Fatalf("login: %d", code)
+	}
+	if code, body := get(admin, "/api/tasks"); code != 200 || len(taskIDs(body)) != 3 {
+		t.Fatalf("admin list: %d %v", code, body)
+	}
+	if code, _ := get(admin, "/api/tasks/"+taskA); code != 200 {
+		t.Fatalf("admin get guest task: %d", code)
+	}
+	code, snap = post(admin, "/api/tasks", probe)
+	if code != http.StatusCreated || snap["task"].(map[string]any)["owner"] != "admin:admin" {
+		t.Fatalf("admin create: %d %v", code, snap)
+	}
+	if _, body := get(admin, "/api/tasks"); len(taskIDs(body)) != 4 {
+		t.Fatalf("admin list after own: %v", body)
+	}
+	if _, body := get(guestA, "/api/tasks"); len(taskIDs(body)) != 2 {
+		t.Fatalf("guest A must not see admin task: %v", body)
 	}
 }

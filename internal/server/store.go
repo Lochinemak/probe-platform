@@ -44,9 +44,13 @@ CREATE TABLE IF NOT EXISTS tasks (
 	target     TEXT NOT NULL,
 	params     TEXT NOT NULL DEFAULT '{}',
 	agent_ids  TEXT NOT NULL DEFAULT '[]',
-	created_at INTEGER NOT NULL
+	created_at INTEGER NOT NULL,
+	monitor_id TEXT NOT NULL DEFAULT '',
+	owner      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_monitor ON tasks(monitor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner, created_at DESC);
 CREATE TABLE IF NOT EXISTS results (
 	task_id     TEXT NOT NULL,
 	agent_id    TEXT NOT NULL,
@@ -71,16 +75,66 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(4)
-	if _, err := db.Exec(schema); err != nil {
+	st := &Store{db: db}
+	if err := st.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	st := &Store{db: db}
-	if err := st.migrateMonitors(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate monitors: %w", err)
-	}
 	return st, nil
+}
+
+// migrate creates missing tables and adds columns introduced after the first
+// release to databases created before them.
+func (s *Store) migrate() error {
+	// Columns added to tasks over time. The CREATE TABLE above already has
+	// them for fresh databases; older files get them via ALTER TABLE, which
+	// has to happen before the schema's indexes reference them.
+	if err := s.ensureColumn("tasks", "monitor_id", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("tasks", "owner", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(monitorSchema); err != nil {
+		return fmt.Errorf("monitors: %w", err)
+	}
+	return nil
+}
+
+// ensureColumn adds column to table when the table exists without it.
+func (s *Store) ensureColumn(table, column, ddl string) error {
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return nil // CREATE TABLE will include it
+	}
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + ddl)
+	return err
 }
 
 // Close closes the database.
@@ -200,16 +254,18 @@ func (s *Store) DeleteAgent(id string) error {
 
 // InsertTask stores a new task.
 func (s *Store) InsertTask(t *protocol.Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks (id,type,target,params,agent_ids,created_at,monitor_id) VALUES (?,?,?,?,?,?,?)`,
-		t.ID, string(t.Type), t.Target, jsonStr(t.Params), jsonStr(nonNil(t.AgentIDs)), unixMs(t.CreatedAt), t.MonitorID)
+	_, err := s.db.Exec(`INSERT INTO tasks (id,type,target,params,agent_ids,created_at,monitor_id,owner) VALUES (?,?,?,?,?,?,?,?)`,
+		t.ID, string(t.Type), t.Target, jsonStr(t.Params), jsonStr(nonNil(t.AgentIDs)), unixMs(t.CreatedAt), t.MonitorID, t.Owner)
 	return err
 }
+
+const taskCols = `id,type,target,params,agent_ids,created_at,monitor_id,owner`
 
 func scanTask(row interface{ Scan(...any) error }) (*protocol.Task, error) {
 	var t protocol.Task
 	var typ, params, agents string
 	var created int64
-	if err := row.Scan(&t.ID, &typ, &t.Target, &params, &agents, &created, &t.MonitorID); err != nil {
+	if err := row.Scan(&t.ID, &typ, &t.Target, &params, &agents, &created, &t.MonitorID, &t.Owner); err != nil {
 		return nil, err
 	}
 	t.Type = protocol.TaskType(typ)
@@ -221,28 +277,39 @@ func scanTask(row interface{ Scan(...any) error }) (*protocol.Task, error) {
 
 // GetTask returns one task or ErrNotFound.
 func (s *Store) GetTask(id string) (*protocol.Task, error) {
-	t, err := scanTask(s.db.QueryRow(`SELECT id,type,target,params,agent_ids,created_at,monitor_id FROM tasks WHERE id=?`, id))
+	t, err := scanTask(s.db.QueryRow(`SELECT `+taskCols+` FROM tasks WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return t, err
 }
 
-// ListTasks returns tasks newest first. monitorID "" lists ad-hoc tasks only;
-// "*" lists everything; any other value lists that monitor's runs.
-func (s *Store) ListTasks(limit, offset int, monitorID string) ([]*protocol.Task, error) {
+// TaskFilter narrows ListTasks. MonitorID "" lists ad-hoc tasks only, "*"
+// lists everything and any other value lists that monitor's runs. Owner ""
+// means any owner; otherwise only that owner's tasks are returned.
+type TaskFilter struct {
+	MonitorID string
+	Owner     string
+}
+
+// ListTasks returns tasks newest first.
+func (s *Store) ListTasks(limit, offset int, f TaskFilter) ([]*protocol.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	q := `SELECT id,type,target,params,agent_ids,created_at,monitor_id FROM tasks`
+	q := `SELECT ` + taskCols + ` FROM tasks WHERE 1=1`
 	args := []any{}
-	switch monitorID {
+	switch f.MonitorID {
 	case "*":
 	case "":
-		q += ` WHERE monitor_id=''`
+		q += ` AND monitor_id=''`
 	default:
-		q += ` WHERE monitor_id=?`
-		args = append(args, monitorID)
+		q += ` AND monitor_id=?`
+		args = append(args, f.MonitorID)
+	}
+	if f.Owner != "" {
+		q += ` AND owner=?`
+		args = append(args, f.Owner)
 	}
 	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)

@@ -76,40 +76,6 @@ CREATE TABLE IF NOT EXISTS notify_channels (
 );
 `
 
-// migrateMonitors creates the monitoring tables and adds tasks.monitor_id.
-func (s *Store) migrateMonitors() error {
-	if _, err := s.db.Exec(monitorSchema); err != nil {
-		return err
-	}
-	rows, err := s.db.Query(`PRAGMA table_info(tasks)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	has := false
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return err
-		}
-		if name == "monitor_id" {
-			has = true
-		}
-	}
-	if !has {
-		if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN monitor_id TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-		if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_monitor ON tasks(monitor_id, created_at DESC)`); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func nullableMs(t *time.Time) any {
 	if t == nil || t.IsZero() {
 		return nil

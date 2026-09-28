@@ -118,7 +118,7 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
         <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" :admin="isAdmin" />
-        <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" />
+        <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" :admin="isAdmin" />
       </div>
     </template>
   </div>

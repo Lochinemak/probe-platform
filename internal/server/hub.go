@@ -481,13 +481,18 @@ func newTaskID() string {
 }
 
 // CreateTask dispatches a probe to the given agents (all online agents when
-// agentIDs is empty) and returns the initial snapshot.
-func (h *Hub) CreateTask(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string) (*protocol.Event, error) {
-	return h.CreateTaskWithMonitor(typ, target, params, agentIDs, "")
+// agentIDs is empty) on behalf of owner and returns the initial snapshot.
+func (h *Hub) CreateTask(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string, owner string) (*protocol.Event, error) {
+	return h.createTask(typ, target, params, agentIDs, "", owner)
 }
 
-// CreateTaskWithMonitor is CreateTask for a scheduled monitor run.
+// CreateTaskWithMonitor is CreateTask for a scheduled monitor run, which has
+// no owner.
 func (h *Hub) CreateTaskWithMonitor(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string, monitorID string) (*protocol.Event, error) {
+	return h.createTask(typ, target, params, agentIDs, monitorID, "")
+}
+
+func (h *Hub) createTask(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string, monitorID, owner string) (*protocol.Event, error) {
 	if !typ.Valid() {
 		return nil, errors.New("invalid task type")
 	}
@@ -514,7 +519,7 @@ func (h *Hub) CreateTaskWithMonitor(typ protocol.TaskType, target string, params
 		return nil, errors.New("no agents online")
 	}
 
-	task := protocol.Task{ID: newTaskID(), Type: typ, Target: target, Params: params, CreatedAt: time.Now(), AgentIDs: agentIDs, MonitorID: monitorID}
+	task := protocol.Task{ID: newTaskID(), Type: typ, Target: target, Params: params, CreatedAt: time.Now(), AgentIDs: agentIDs, MonitorID: monitorID, Owner: owner}
 	tr := &taskRun{
 		task:    task,
 		results: map[string]*protocol.AgentResult{},
@@ -525,7 +530,9 @@ func (h *Hub) CreateTaskWithMonitor(typ protocol.TaskType, target string, params
 		return nil, err
 	}
 
-	taskMsg, err := protocol.NewMessage(protocol.MsgTask, task)
+	agentTask := task
+	agentTask.Owner = "" // who asked is none of the agents' business
+	taskMsg, err := protocol.NewMessage(protocol.MsgTask, agentTask)
 	if err != nil {
 		return nil, err
 	}
