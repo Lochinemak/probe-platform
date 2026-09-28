@@ -8,12 +8,26 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"probe-platform/internal/protocol"
 )
+
+// PrivilegeHint tells the operator how to get raw-socket rights (ICMP ping,
+// MTR) on this OS.
+func PrivilegeHint() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "run the agent as Administrator, or install it as a service (probe-agent service install)"
+	case "darwin":
+		return "run the agent as root (sudo)"
+	default:
+		return "run the agent as root, grant CAP_NET_RAW (setcap / systemd AmbientCapabilities), or use docker --cap-add NET_RAW"
+	}
+}
 
 // def returns v unless it is zero, in which case it returns fallback.
 func def(v, fallback int) int {

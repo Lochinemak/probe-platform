@@ -7,6 +7,10 @@ import (
 	"syscall"
 )
 
+// tcpProbePicksPort is false here: the kernel assigns the source port when
+// prepareTCPProbeSocket binds, and reports it back.
+const tcpProbePicksPort = false
+
 // prepareTCPProbeSocket sets the TTL on a not-yet-connected TCP socket and
 // binds it to an ephemeral port so the caller learns the source port before
 // connect(). Runs inside net.Dialer.Control.

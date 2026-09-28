@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -39,7 +40,11 @@ func Ping(ctx context.Context, target string, p protocol.Params, progress Progre
 	if err != nil && isPermissionError(err) {
 		res, err = runPinger(ctx, target, ip, count, interval, perProbe, size, false, onReply)
 		if err != nil && isPermissionError(err) {
-			return nil, fmt.Errorf("icmp not permitted: run the agent as root / with CAP_NET_RAW, or set net.ipv4.ping_group_range (%v)", shortErr(err))
+			hint := PrivilegeHint()
+			if runtime.GOOS == "linux" {
+				hint += ", or set net.ipv4.ping_group_range to cover the agent's gid"
+			}
+			return nil, fmt.Errorf("icmp not permitted: %s (%v)", hint, shortErr(err))
 		}
 	}
 	return res, err
@@ -56,7 +61,9 @@ func isPermissionError(err error) bool {
 	}
 	return strings.Contains(s, "operation not permitted") ||
 		strings.Contains(s, "permission denied") ||
-		strings.Contains(s, "socket: protocol not supported")
+		strings.Contains(s, "socket: protocol not supported") ||
+		strings.Contains(s, "forbidden by its access permissions") || // Windows WSAEACCES on the raw socket
+		strings.Contains(s, "requested protocol has not been configured") // Windows has no unprivileged ICMP sockets
 }
 
 func runPinger(ctx context.Context, target string, ip net.IP, count int, interval, perProbe time.Duration, size int, privileged bool, onReply func(protocol.Reply)) (*protocol.PingResult, error) {
@@ -89,7 +96,7 @@ func runPinger(ctx context.Context, target string, ip net.IP, count int, interva
 		mu.Unlock()
 	}
 	pinger.OnRecv = func(pkt *probing.Packet) {
-		r := protocol.Reply{Seq: pkt.Seq, OK: true, RTTMs: ms(pkt.Rtt), TTL: pkt.TTL, Size: pkt.Nbytes}
+		r := protocol.Reply{Seq: pkt.Seq, OK: true, RTTMs: ms(pkt.Rtt), TTL: max(pkt.TTL, 0), Size: pkt.Nbytes} // TTL is -1 on Windows (not readable there)
 		mu.Lock()
 		if _, dup := replies[pkt.Seq]; dup {
 			mu.Unlock()

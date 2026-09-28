@@ -69,7 +69,7 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 
 	conn, err := listenRawICMP(v6)
 	if err != nil {
-		return nil, fmt.Errorf("mtr needs a raw ICMP socket (run the agent as root or grant CAP_NET_RAW): %w", err)
+		return nil, fmt.Errorf("mtr needs a raw ICMP socket (%s): %w", PrivilegeHint(), err)
 	}
 	defer conn.Close()
 
@@ -345,6 +345,8 @@ type mtrEngine struct {
 	pend     *pendingMap
 	replies  chan mtrReply
 	sendMu   sync.Mutex
+
+	usedPorts map[uint16]bool // tcp source ports handed out so far (tcpProbePicksPort platforms)
 }
 
 // send launches one probe for ttl. The pending entry is keyed by the ICMP
@@ -431,17 +433,27 @@ func (e *mtrEngine) sendTCP(ttl int) error {
 	var sentAt time.Time
 	registered := make(chan struct{})
 	d := net.Dialer{Timeout: e.timeout}
+	if tcpProbePicksPort {
+		// Windows: the kernel binds only inside connect(), so choose the
+		// source port here and let the dialer bind it; the pending entry can
+		// then be keyed before the SYN leaves.
+		lport = e.nextProbePort()
+		d.LocalAddr = &net.TCPAddr{Port: int(lport)}
+	}
 	var ctlErr error
 	d.Control = func(network, address string, c syscall.RawConn) error {
-		// Set the TTL and bind first so we know our source port before the
-		// SYN leaves; hops quote that port in Time Exceeded.
+		// Set the TTL (and, where the platform allows it, bind) first so we
+		// know our source port before the SYN leaves; hops quote that port in
+		// Time Exceeded.
 		return c.Control(func(fd uintptr) {
 			port, err := prepareTCPProbeSocket(fd, e.v6, ttl)
 			if err != nil {
 				ctlErr = err
 				return
 			}
-			lport = port
+			if port != 0 {
+				lport = port
+			}
 			sentAt = time.Now()
 			e.pend.add(lport, pendingProbe{ttl: ttl, sentAt: sentAt, cancel: cancel})
 			close(registered)
@@ -457,6 +469,10 @@ func (e *mtrEngine) sendTCP(ttl int) error {
 		case <-registered:
 		default:
 			return // control never ran or failed
+		}
+		if tcpProbePicksPort && isAddrInUse(err) {
+			e.pend.take(lport) // something else holds our chosen port; this probe counts as lost
+			return
 		}
 		// Completed handshake or an RST from the destination both mean it was reached.
 		if err == nil || isConnRefused(err) {
@@ -476,6 +492,41 @@ func (e *mtrEngine) sendTCP(ttl int) error {
 		}
 		return nil
 	}
+}
+
+// Source ports for tcp probes on platforms where the engine must choose them
+// (tcpProbePicksPort). 30000-48999 sits below the dynamic range every OS uses
+// for its own ephemeral sockets (Windows: 49152+), so the only collisions are
+// with something already listening there; a port is never reused within one
+// run so a late reply cannot be attributed to a newer probe.
+const (
+	probePortBase = 30000
+	probePortSpan = 19000
+)
+
+// nextProbePort is called from the single sending goroutine only.
+func (e *mtrEngine) nextProbePort() uint16 {
+	if e.usedPorts == nil {
+		e.usedPorts = map[uint16]bool{}
+	}
+	for i := 0; i < 1000; i++ {
+		p := uint16(probePortBase + rand.IntN(probePortSpan))
+		if !e.usedPorts[p] {
+			e.usedPorts[p] = true
+			return p
+		}
+	}
+	e.usedPorts = map[uint16]bool{} // a run needs at most 64 hops x 100 rounds; start over rather than spin
+	return e.nextProbePort()
+}
+
+func isAddrInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "address already in use") || // POSIX EADDRINUSE
+		strings.Contains(s, "Only one usage of each socket address") // Windows WSAEADDRINUSE
 }
 
 func tcpNetwork(v6 bool) string {
