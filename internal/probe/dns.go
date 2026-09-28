@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -42,6 +43,14 @@ func DNS(ctx context.Context, target string, p protocol.Params, progress Progres
 	if err != nil {
 		return nil, err
 	}
+	// An untrusted caller may not point the query at an internal resolver: that
+	// would make the agent a probe for anything listening on the LAN. The
+	// node's own system resolver (empty spec) stays allowed.
+	if p.PublicOnly && strings.TrimSpace(p.DNSServer) != "" {
+		if err := checkPublicDNSServer(ctx, server, proto, p.IPVersion); err != nil {
+			return nil, err
+		}
+	}
 
 	res := &protocol.DNSResult{Target: name, RecordType: rname}
 	var rtts []float64
@@ -51,7 +60,7 @@ func DNS(ctx context.Context, target string, p protocol.Params, progress Progres
 				break
 			}
 		}
-		a := dnsQuery(ctx, name+".", rtype, server, proto, timeout, p.IPVersion)
+		a := dnsQuery(ctx, name+".", rtype, server, proto, timeout, p.IPVersion, p.PublicOnly)
 		a.Seq = i
 		res.Attempts = append(res.Attempts, a)
 		if a.OK {
@@ -125,7 +134,7 @@ func systemNameserver() (string, error) {
 	return "", errors.New("no nameserver in /etc/resolv.conf; specify dns_server")
 }
 
-func dnsQuery(ctx context.Context, fqdn string, rtype dnsmessage.Type, server, proto string, timeout time.Duration, ipVersion string) protocol.DNSAttempt {
+func dnsQuery(ctx context.Context, fqdn string, rtype dnsmessage.Type, server, proto string, timeout time.Duration, ipVersion string, publicOnly bool) protocol.DNSAttempt {
 	a := protocol.DNSAttempt{Server: server, Proto: proto, Answers: []protocol.DNSAnswer{}}
 	qname, err := dnsmessage.NewName(fqdn)
 	if err != nil {
@@ -155,14 +164,14 @@ func dnsQuery(ctx context.Context, fqdn string, rtype dnsmessage.Type, server, p
 	var reply []byte
 	switch proto {
 	case "doh":
-		reply, err = dohExchange(qctx, server, msg)
+		reply, err = dohExchange(qctx, server, msg, publicOnly)
 	case "tcp":
-		reply, err = tcpExchange(qctx, server, msg, timeout, ipVersion)
+		reply, err = tcpExchange(qctx, server, msg, timeout, ipVersion, publicOnly)
 	default:
-		reply, err = udpExchange(qctx, server, msg, timeout, ipVersion)
+		reply, err = udpExchange(qctx, server, msg, timeout, ipVersion, publicOnly)
 		if err == nil && len(reply) >= 3 && reply[2]&0x02 != 0 { // TC bit: retry over TCP
 			a.Truncated = true
-			if r2, err2 := tcpExchange(qctx, server, msg, timeout, ipVersion); err2 == nil {
+			if r2, err2 := tcpExchange(qctx, server, msg, timeout, ipVersion, publicOnly); err2 == nil {
 				reply, a.Proto = r2, "tcp"
 			}
 		}
@@ -278,8 +287,8 @@ func dialNetwork(base, ipVersion string) string {
 	return base
 }
 
-func udpExchange(ctx context.Context, server string, msg []byte, timeout time.Duration, ipVersion string) ([]byte, error) {
-	d := net.Dialer{Timeout: timeout}
+func udpExchange(ctx context.Context, server string, msg []byte, timeout time.Duration, ipVersion string, publicOnly bool) ([]byte, error) {
+	d := net.Dialer{Timeout: timeout, Control: publicAddrControl(publicOnly)}
 	conn, err := d.DialContext(ctx, dialNetwork("udp", ipVersion), server)
 	if err != nil {
 		return nil, err
@@ -297,8 +306,8 @@ func udpExchange(ctx context.Context, server string, msg []byte, timeout time.Du
 	return buf[:n], nil
 }
 
-func tcpExchange(ctx context.Context, server string, msg []byte, timeout time.Duration, ipVersion string) ([]byte, error) {
-	d := net.Dialer{Timeout: timeout}
+func tcpExchange(ctx context.Context, server string, msg []byte, timeout time.Duration, ipVersion string, publicOnly bool) ([]byte, error) {
+	d := net.Dialer{Timeout: timeout, Control: publicAddrControl(publicOnly)}
 	conn, err := d.DialContext(ctx, dialNetwork("tcp", ipVersion), server)
 	if err != nil {
 		return nil, err
@@ -322,14 +331,18 @@ func tcpExchange(ctx context.Context, server string, msg []byte, timeout time.Du
 	return reply, nil
 }
 
-func dohExchange(ctx context.Context, u string, msg []byte) ([]byte, error) {
+func dohExchange(ctx context.Context, u string, msg []byte, publicOnly bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(msg))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/dns-message")
 	req.Header.Set("Accept", "application/dns-message")
-	client := &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:             nil,
+		DisableKeepAlives: true,
+		DialContext:       (&net.Dialer{Control: publicAddrControl(publicOnly)}).DialContext,
+	}}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -339,4 +352,30 @@ func dohExchange(ctx context.Context, u string, msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("doh: http %d", resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 65535))
+}
+
+// publicAddrControl returns a net.Dialer.Control hook enforcing the public-only
+// destination policy, or nil when the caller is trusted.
+func publicAddrControl(publicOnly bool) func(string, string, syscall.RawConn) error {
+	if !publicOnly {
+		return nil
+	}
+	return func(_, address string, _ syscall.RawConn) error { return CheckPublicAddr(address) }
+}
+
+// checkPublicDNSServer rejects a caller-supplied resolver that is not on the
+// public internet.
+func checkPublicDNSServer(ctx context.Context, server, proto, ipVersion string) error {
+	host := server
+	if proto == "doh" {
+		u, err := url.Parse(server)
+		if err != nil {
+			return fmt.Errorf("invalid DoH url: %w", err)
+		}
+		host = u.Hostname()
+	} else if h, _, err := net.SplitHostPort(server); err == nil {
+		host = h
+	}
+	_, err := Resolve(ctx, host, ipVersion, true)
+	return err
 }

@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-go@v5
-        with: { go-version: "1.26" }
+        with: { go-version: "1.26.6" }
       - run: make web
       - run: go vet ./...
       - run: go test ./...

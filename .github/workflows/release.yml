@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - uses: actions/setup-go@v5
-        with: { go-version: "1.26" }
+        with: { go-version: "1.26.6" }
       - run: make web
       - run: make agents-all VERSION=${GITHUB_REF_NAME}
       - run: cd bin && sha256sum * > SHA256SUMS

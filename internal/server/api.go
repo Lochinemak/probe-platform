@@ -83,7 +83,56 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.HandleFunc("GET /uninstall-agent.sh", a.installScript)
 	mux.HandleFunc("GET /install-agent.ps1", a.installScript)
 	mux.Handle("/", a.spaHandler())
-	return a.recoverer(mux)
+	return a.recoverer(a.securityHeaders(a.crossSiteGuard(mux)))
+}
+
+// securityHeaders sets the response headers that keep a browser from
+// reinterpreting our responses: no sniffing, no framing, no referrer leakage,
+// and a content policy for the dashboard itself (the built SPA loads one
+// external module script and no inline script).
+func (a *API) securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+		"connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-Frame-Options", "DENY")
+		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/ws/") {
+			h.Set("Content-Security-Policy", csp)
+		}
+		if secureCookie(r) {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// crossSiteGuard is defence in depth against cross-site requests riding on the
+// session cookie. SameSite=Lax already keeps the cookie off cross-site form
+// posts; this refuses the request outright when the browser tells us it is
+// cross-site. Non-browser clients (curl, the install scripts, agents) send
+// neither header and are unaffected.
+func (a *API) crossSiteGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			switch r.Header.Get("Sec-Fetch-Site") {
+			case "", "same-origin", "none":
+			default:
+				writeErr(w, http.StatusForbidden, "拒绝跨站请求")
+				return
+			}
+			if o := r.Header.Get("Origin"); o != "" {
+				u, err := url.Parse(o)
+				if err != nil || !strings.EqualFold(u.Host, r.Host) {
+					writeErr(w, http.StatusForbidden, "拒绝跨站请求")
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -134,8 +183,14 @@ func (a *API) protectGuest(next http.HandlerFunc) http.Handler {
 var guestLimiter = &sessionAuth{attempts: map[string][]time.Time{}}
 
 // guestParams trims probe parameters for anonymous visitors so a public
-// dashboard cannot be used to generate heavy traffic from every node.
+// dashboard cannot be used to generate heavy traffic from every node, nor to
+// reach anything but the public internet. Whatever the request asked for, the
+// fields set here win: they are the guest policy, not a default.
 func guestParams(typ protocol.TaskType, p protocol.Params) protocol.Params {
+	// The agents run inside home LANs and on the dashboard host itself, so an
+	// untrusted caller is confined to globally routable destinations.
+	p.PublicOnly = true
+	p.InsecureTLS = false
 	switch typ {
 	case protocol.TaskHTTP:
 		if p.Count > 3 {
@@ -143,6 +198,15 @@ func guestParams(typ protocol.TaskType, p protocol.Params) protocol.Params {
 		}
 		p.SpeedTest = false
 		p.SpeedSeconds = 0
+		// A crafted method, headers or body would let an anonymous visitor send
+		// arbitrary requests from every node; a guest gets a plain read.
+		if strings.EqualFold(strings.TrimSpace(p.Method), "HEAD") {
+			p.Method = "HEAD"
+		} else {
+			p.Method = "GET"
+		}
+		p.Headers = nil
+		p.Body = ""
 	case protocol.TaskMTR:
 		if p.Count > 10 {
 			p.Count = 10
@@ -262,8 +326,12 @@ func (a *API) installScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-func (a *API) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": buildinfo.Version})
+func (a *API) health(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{"ok": true}
+	if a.auth.isAdmin(r) {
+		out["version"] = buildinfo.Version
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *API) session(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +342,7 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) {
 	} else if !a.auth.enabled() {
 		user = map[string]string{"name": "admin", "via": "open"}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"auth_required": a.auth.enabled(),
 		"authenticated": role == roleAdmin,
 		"role":          role,
@@ -284,9 +352,14 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) {
 			"password": a.auth.passwordLoginEnabled(),
 			"logto":    a.settings.Logto() != nil,
 		},
-		"version":     buildinfo.Version,
-		"agent_image": a.settings.AgentImage(),
-	})
+	}
+	// Version and onboarding details are for administrators; a guest has no use
+	// for them and they only help someone fingerprinting the build.
+	if role == roleAdmin {
+		out["version"] = buildinfo.Version
+		out["agent_image"] = a.settings.AgentImage()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +367,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	ip := clientIP(r, a.cfg.TrustProxy)
+	ip := a.cfg.ClientIP(r)
 	if !a.auth.allowAttempt(ip) {
 		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again in a minute")
 		return
@@ -338,7 +411,7 @@ func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
 	if wasOpen && a.auth.enabled() && a.auth.sessionFrom(r) == nil {
 		a.auth.setCookie(w, r, Session{Role: roleAdmin, Name: a.settings.AdminUser(), Via: "bootstrap"})
 	}
-	a.log.Info("settings updated", "by", clientIP(r, a.cfg.TrustProxy))
+	a.log.Info("settings updated", "by", a.cfg.ClientIP(r))
 	writeJSON(w, http.StatusOK, a.settings.View())
 }
 
@@ -361,7 +434,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.clearCookie(w)
-	a.log.Info("admin password changed", "by", clientIP(r, a.cfg.TrustProxy))
+	a.log.Info("admin password changed", "by", a.cfg.ClientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "relogin": true})
 }
 
@@ -401,7 +474,7 @@ func (a *API) logtoLogin(w http.ResponseWriter, r *http.Request) {
 // logtoCallback finishes the flow and issues an admin session.
 func (a *API) logtoCallback(w http.ResponseWriter, r *http.Request) {
 	fail := func(msg string) {
-		a.log.Warn("logto callback rejected", "reason", msg, "ip", clientIP(r, a.cfg.TrustProxy))
+		a.log.Warn("logto callback rejected", "reason", msg, "ip", a.cfg.ClientIP(r))
 		http.Redirect(w, r, "/?login_error="+url.QueryEscape(msg), http.StatusFound)
 	}
 	logto := a.settings.Logto()
@@ -425,6 +498,10 @@ func (a *API) logtoCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !logto.IsAdmin(id) {
+		if !logto.HasAdmins() {
+			fail("尚未配置 Logto 管理员名单，所有 Logto 登录都会被拒绝；请先在「设置 → Logto 登录」里填写允许的管理员")
+			return
+		}
 		fail("账号 " + id.DisplayName() + " 不在管理员名单中")
 		return
 	}
@@ -485,14 +562,23 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := a.auth.owner(r)
 	if a.auth.role(r) == roleGuest {
-		if !guestLimiter.allowAttempt(clientIP(r, a.cfg.TrustProxy)) {
+		if !guestLimiter.allowAttempt(a.cfg.ClientIP(r)) {
 			writeErr(w, http.StatusTooManyRequests, "游客每分钟最多发起 10 次拨测，请稍后再试或登录")
 			return
 		}
 		req.Params = guestParams(req.Type, req.Params)
+		// Rejected here as well as on the agent: this catches the target before
+		// any packet is sent, including by an agent too old to know the policy.
+		if err := validateGuestTarget(r.Context(), req.Type, req.Target, req.Params); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// The cookie has to exist before the browser opens the event stream,
 		// so mint it here rather than on the first page load.
 		owner = a.auth.ensureGuestOwner(w, r)
+	} else {
+		// Only the server decides this; never take it from the request body.
+		req.Params.PublicOnly = false
 	}
 	snap, err := a.hub.CreateTask(req.Type, req.Target, req.Params, req.AgentIDs, owner)
 	if err != nil {

@@ -18,3 +18,9 @@ server {
     }
 }
 # Remember to start probe-server with PROBE_TRUST_PROXY=true.
+#
+# proxy_add_x_forwarded_for appends the peer address to whatever the client
+# sent, so the entry this proxy added is the last one. That matches the default
+# PROBE_PROXY_HOPS=1. Add a hop for every further proxy in front of this one
+# (a CDN, for example), otherwise a client can put any address it likes in
+# X-Forwarded-For and take over the identity used for rate limiting.

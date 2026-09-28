@@ -4,10 +4,17 @@ package server
 
 import (
 	"flag"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 )
+
+// ClientIP identifies the caller of r under this configuration. Used for rate
+// limiting and audit logging, so it must not be forgeable by the caller.
+func (c Config) ClientIP(r *http.Request) string {
+	return clientIP(r, c.TrustProxy, c.ProxyHops)
+}
 
 // Config is the server configuration. Every field maps to a flag and an
 // environment variable (PROBE_*).
@@ -23,6 +30,7 @@ type Config struct {
 	LogtoAppSecret    string
 	LogtoAdmins       string        // comma-separated subs/emails/usernames allowed as admin; empty = any
 	TrustProxy        bool          // honour X-Forwarded-For / X-Real-IP
+	ProxyHops         int           // number of reverse proxies in front; only the entries they appended to X-Forwarded-For are trusted
 	GeoIPOnline       bool          // look up agent public IPs via ip-api.com
 	IP2RegionDB       string        // path to ip2region xdb for offline hop annotation
 	TaskTimeout       time.Duration // hard cap for a task across all agents
@@ -75,6 +83,7 @@ func LoadConfig(args []string) Config {
 	fs.StringVar(&c.LogtoAppSecret, "logto-app-secret", envOr("PROBE_LOGTO_APP_SECRET", ""), "Logto application secret (traditional web app); empty for a public app with PKCE only")
 	fs.StringVar(&c.LogtoAdmins, "logto-admins", envOr("PROBE_LOGTO_ADMINS", ""), "comma-separated Logto users (sub, email or username) allowed as admin; empty = every Logto user")
 	fs.BoolVar(&c.TrustProxy, "trust-proxy", envBool("PROBE_TRUST_PROXY", false), "trust X-Forwarded-For (set when behind nginx/caddy)")
+	fs.IntVar(&c.ProxyHops, "proxy-hops", envInt("PROBE_PROXY_HOPS", 1), "how many reverse proxies sit in front; the client's own X-Forwarded-For entries are ignored")
 	fs.BoolVar(&c.GeoIPOnline, "geoip-online", envBool("PROBE_GEOIP_ONLINE", true), "look up agent public IP location via ip-api.com")
 	fs.StringVar(&c.IP2RegionDB, "ip2region-db", envOr("PROBE_IP2REGION_DB", ""), "path to ip2region xdb (default <data>/ip2region.xdb if present)")
 	timeout := fs.Int("task-timeout", envInt("PROBE_TASK_TIMEOUT", 180), "seconds before an unfinished task is failed")

@@ -69,7 +69,10 @@ func FakeIPError(host string, ip net.IP) error {
 // ("", "4" or "6"). Plain IP literals are validated against the version.
 // Hostnames that resolve into the fake-IP range are rejected with a
 // FakeIPError; literal 198.18.x.x targets are allowed.
-func Resolve(ctx context.Context, host, ipVersion string) (net.IP, error) {
+//
+// publicOnly additionally rejects any destination that is not globally
+// routable (see IsPublicIP), which is what an untrusted caller is limited to.
+func Resolve(ctx context.Context, host, ipVersion string, publicOnly bool) (net.IP, error) {
 	host = strings.TrimSpace(host)
 	host = strings.Trim(host, "[]")
 	if host == "" {
@@ -82,6 +85,9 @@ func Resolve(ctx context.Context, host, ipVersion string) (net.IP, error) {
 		}
 		if ipVersion == "6" && is4 {
 			return nil, fmt.Errorf("%s is not an IPv6 address", host)
+		}
+		if publicOnly && !IsPublicIP(ip) {
+			return nil, PrivateTargetError(host, ip)
 		}
 		return ip, nil
 	}
@@ -114,6 +120,9 @@ func Resolve(ctx context.Context, host, ipVersion string) (net.IP, error) {
 	}
 	if IsFakeIP(chosen) {
 		return nil, FakeIPError(host, chosen)
+	}
+	if publicOnly && !IsPublicIP(chosen) {
+		return nil, PrivateTargetError(host, chosen)
 	}
 	return chosen, nil
 }

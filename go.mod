@@ -2,6 +2,10 @@ module probe-platform
 
 go 1.26.0
 
+// Pinned so every build gets the patched standard library (crypto/tls,
+// crypto/x509, net/http, net/url advisories fixed up to this release).
+toolchain go1.26.6
+
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/gorilla/websocket v1.5.3

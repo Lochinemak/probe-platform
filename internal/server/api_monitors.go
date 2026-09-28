@@ -315,13 +315,34 @@ func (a *API) listAlerts(w http.ResponseWriter, r *http.Request) {
 
 // --- notification channels --------------------------------------------------
 
+// publicChannel copies ch with its credential values removed, reporting only
+// which ones are set. Bot tokens and SMTP passwords have no business being
+// echoed back into a browser tab.
+func publicChannel(ch *protocol.NotifyChannel) *protocol.NotifyChannel {
+	out := *ch
+	out.Config = make(map[string]string, len(ch.Config))
+	out.SecretSet = map[string]bool{}
+	for k, v := range ch.Config {
+		if isSecretKey(ch.Type, k) {
+			out.SecretSet[k] = v != ""
+			continue
+		}
+		out.Config[k] = v
+	}
+	return &out
+}
+
 func (a *API) listChannels(w http.ResponseWriter, _ *http.Request) {
 	chs, err := a.store.ListChannels()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"channels": chs, "types": ChannelTypes})
+	out := make([]*protocol.NotifyChannel, 0, len(chs))
+	for _, ch := range chs {
+		out = append(out, publicChannel(ch))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "types": ChannelTypes})
 }
 
 func decodeChannel(r *http.Request) (*protocol.NotifyChannel, error) {
@@ -357,7 +378,7 @@ func (a *API) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
+	writeJSON(w, http.StatusCreated, publicChannel(c))
 }
 
 func (a *API) updateChannel(w http.ResponseWriter, r *http.Request) {
@@ -366,17 +387,31 @@ func (a *API) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "channel not found")
 		return
 	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	c, err := decodeChannel(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	c.ID, c.CreatedAt = cur.ID, cur.CreatedAt
+	// The dashboard never receives the stored credentials, so it cannot send
+	// them back: an empty credential field means "unchanged". Clearing one is
+	// done by deleting the channel or switching its type.
+	if c.Type == cur.Type {
+		for k, v := range cur.Config {
+			if isSecretKey(cur.Type, k) && v != "" && c.Config[k] == "" {
+				c.Config[k] = v
+			}
+		}
+	}
 	if err := a.store.UpsertChannel(c); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	writeJSON(w, http.StatusOK, publicChannel(c))
 }
 
 func (a *API) deleteChannel(w http.ResponseWriter, r *http.Request) {

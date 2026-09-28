@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"probe-platform/internal/protocol"
@@ -51,7 +52,7 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	}
 	// Resolve up front purely to reject fake-IP answers; the HTTP client does
 	// its own lookup for the request itself.
-	if _, err := Resolve(ctx, u.Hostname(), p.IPVersion); err != nil {
+	if _, err := Resolve(ctx, u.Hostname(), p.IPVersion, p.PublicOnly); err != nil {
 		return nil, err
 	}
 
@@ -168,6 +169,15 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 		network = "tcp6"
 	}
 	dialer := &net.Dialer{Timeout: timeout, KeepAlive: -1}
+	if p.PublicOnly {
+		// Checked here rather than before the request so it also covers the
+		// hosts a redirect chain points at and a name that resolves to a
+		// private address only on this node (DNS rebinding): Control runs once
+		// the address is resolved, just before connect().
+		dialer.Control = func(_, address string, _ syscall.RawConn) error {
+			return CheckPublicAddr(address)
+		}
+	}
 	transport := &http.Transport{
 		Proxy: nil, // always measure the direct path, ignore HTTP_PROXY
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {

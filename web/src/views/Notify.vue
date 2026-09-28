@@ -24,12 +24,20 @@ const fieldLabels = {
   priority: ['优先级（可选）', '0–10，留空为 5；≥4 手机会响铃'],
 }
 const labelOf = (type, f) => fieldLabels[type + '.' + f] || fieldLabels[f] || [f, '']
-const secretFields = ['password', 'bot_token', 'secret', 'pushkey', 'token']
+// Credentials are write-only: the server reports which ones are stored
+// (secret_set) but never their value, and an empty field on save keeps the
+// stored one. Kept in sync with channelSecretKeys in internal/server/notify.go.
+const secretKeys = {
+  telegram: ['bot_token'], wecom: ['webhook_url'], dingtalk: ['webhook_url', 'secret'], bark: ['url'],
+  webhook: ['auth_header'], smtp: ['password'], pushdeer: ['pushkey'], gotify: ['token'],
+}
+const isSecret = (type, f) => (secretKeys[type] || []).includes(f)
+const secretPlaceholder = (c, f) => (c.secret_set && c.secret_set[f]) ? '已保存，留空则保持不变' : ''
 
 async function load() {
   try { const r = await api.channels(); channels.value = r.channels; types.value = r.types } catch (e) { if (e.status !== 401) error.value = e.message }
 }
-function startCreate() { editing.value = { name: '', type: 'telegram', config: {}, enabled: true }; error.value = ''; notice.value = '' }
+function startCreate() { editing.value = { name: '', type: 'telegram', config: {}, enabled: true, secret_set: {} }; error.value = ''; notice.value = '' }
 function startEdit(c) { editing.value = JSON.parse(JSON.stringify(c)); error.value = ''; notice.value = '' }
 async function save() {
   const e = editing.value
@@ -68,8 +76,8 @@ onMounted(load)
         </div>
         <div class="row" style="gap:16px;margin-top:10px">
           <div class="field" v-for="f in types[editing.type] || []" :key="f" :class="{ grow: ['url', 'webhook_url', 'server'].includes(f) }">
-            <label>{{ labelOf(editing.type, f)[0] }}</label>
-            <input :type="secretFields.includes(f) ? 'password' : 'text'" v-model="editing.config[f]" :placeholder="labelOf(editing.type, f)[1]" spellcheck="false" autocomplete="off" />
+            <label>{{ labelOf(editing.type, f)[0] }}<span class="sub" v-if="isSecret(editing.type, f) && editing.secret_set && editing.secret_set[f]"> 已保存，留空则保持不变</span></label>
+            <input :type="isSecret(editing.type, f) ? 'password' : 'text'" v-model="editing.config[f]" :placeholder="isSecret(editing.type, f) ? (secretPlaceholder(editing, f) || labelOf(editing.type, f)[1]) : labelOf(editing.type, f)[1]" spellcheck="false" autocomplete="off" />
           </div>
         </div>
         <div class="row" style="margin-top:12px">
@@ -92,7 +100,7 @@ onMounted(load)
             <td><span class="status-dot" :class="{ online: c.enabled }"></span></td>
             <td><b>{{ c.name }}</b></td>
             <td>{{ typeLabels[c.type] || c.type }}</td>
-            <td class="sub mono" style="white-space:normal">{{ Object.entries(c.config).filter(([k, v]) => v && !secretFields.includes(k)).map(([k, v]) => k + '=' + v).join('  ') }}</td>
+            <td class="sub mono" style="white-space:normal">{{ [...Object.entries(c.config).filter(([, v]) => v).map(([k, v]) => k + '=' + v), ...Object.entries(c.secret_set || {}).filter(([, set]) => set).map(([k]) => k + '=已保存')].join('  ') }}</td>
             <td>
               <button class="btn sm" @click="test(c)" :disabled="testing === c.id">{{ testing === c.id ? '发送中…' : '发送测试' }}</button>
               <button class="btn sm" @click="startEdit(c)">编辑</button>

@@ -29,7 +29,7 @@ func Ping(ctx context.Context, target string, p protocol.Params, progress Progre
 	perProbe := time.Duration(def(p.TimeoutMs, 2000)) * time.Millisecond
 	size := clamp(def(p.PacketSize, 56), 24, 1400) // pro-bing needs >= 24 bytes
 
-	ip, err := Resolve(ctx, target, p.IPVersion)
+	ip, err := Resolve(ctx, target, p.IPVersion, p.PublicOnly)
 	if err != nil {
 		return nil, err
 	}

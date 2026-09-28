@@ -67,8 +67,15 @@ func NewLogto(cfg Config, log *slog.Logger) *Logto {
 		log:         log,
 	}
 	log.Info("logto login enabled", "issuer", issuer, "app_id", cfg.LogtoAppID, "redirect", l.redirectURL, "admin_allowlist", len(admins))
+	if len(admins) == 0 {
+		log.Warn("logto: no admin allowlist configured, every Logto login will be refused. List the accounts allowed to administer this dashboard on the settings page (Logto tenants usually accept self-registration).")
+	}
 	return l
 }
+
+// HasAdmins reports whether an allowlist is configured. Without one no Logto
+// account can sign in.
+func (l *Logto) HasAdmins() bool { return len(l.admins) > 0 }
 
 // RedirectURL is what must be registered in the Logto application.
 func (l *Logto) RedirectURL() string { return l.redirectURL }
@@ -157,10 +164,12 @@ func (id *Identity) DisplayName() string {
 	return "logto-user"
 }
 
-// IsAdmin applies the optional allowlist.
+// IsAdmin applies the allowlist. An empty list grants nobody: the provider may
+// well accept self-registration, in which case treating "no list" as "everyone"
+// would hand admin to anyone who can create an account there.
 func (l *Logto) IsAdmin(id *Identity) bool {
 	if len(l.admins) == 0 {
-		return true
+		return false
 	}
 	for _, k := range []string{id.Sub, id.Email, id.Username} {
 		if k != "" && l.admins[strings.ToLower(k)] {

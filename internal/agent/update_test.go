@@ -113,3 +113,43 @@ func TestHTTPBaseWithPrefix(t *testing.T) {
 		t.Fatalf("defaults: %q %q", c.httpBase, c.cfg.Server)
 	}
 }
+
+// TestSelfUpdateRefusesUnauthenticatedTransport: the checksum in an update
+// offer arrives over the same connection as the bytes, so it only proves the
+// download was not corrupted. Replacing a binary that runs as root therefore
+// requires a connection we can actually authenticate.
+func TestSelfUpdateRefusesUnauthenticatedTransport(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	offer := protocol.Update{Version: "v2", Path: "/api/agent/download/linux-amd64", SHA256: strings.Repeat("a", 64), Size: 10}
+
+	// Plain http to a real host: refused before anything is downloaded.
+	c, err := New(Config{Server: "http://probe.example.com", Token: "t", Name: "n", Version: "v1", SelfUpdate: true}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.selfUpdate(context.Background(), offer)
+	if err == nil || !strings.Contains(err.Error(), "plain http") {
+		t.Fatalf("plain http must be refused, got %v", err)
+	}
+
+	// https but with certificate checks turned off is no better.
+	c, err = New(Config{Server: "https://probe.example.com", Token: "t", Name: "n", Version: "v1", SelfUpdate: true, InsecureTLS: true}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.selfUpdate(context.Background(), offer)
+	if err == nil || !strings.Contains(err.Error(), "TLS verification") {
+		t.Fatalf("insecure TLS must be refused, got %v", err)
+	}
+
+	// https, and loopback for local development, are both fine.
+	for _, server := range []string{"https://probe.example.com", "http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"} {
+		c, err = New(Config{Server: server, Token: "t", Name: "n", Version: "v1", SelfUpdate: true}, log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.updateTransportOK(); err != nil {
+			t.Errorf("%s must be allowed: %v", server, err)
+		}
+	}
+}

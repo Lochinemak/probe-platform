@@ -70,7 +70,7 @@ func TestFakeIPDetection(t *testing.T) {
 		}
 	}
 	// A literal fake-IP target is allowed (the user asked for it explicitly).
-	if _, err := Resolve(context.Background(), "198.18.3.6", ""); err != nil {
+	if _, err := Resolve(context.Background(), "198.18.3.6", "", false); err != nil {
 		t.Fatalf("literal fake-IP: %v", err)
 	}
 	if !strings.Contains(FakeIPError("www.qq.com", net.ParseIP("198.18.3.6")).Error(), "fake-IP 198.18.3.6") {
@@ -88,14 +88,14 @@ func TestIsPermissionError(t *testing.T) {
 }
 
 func TestResolveLiteral(t *testing.T) {
-	ip, err := Resolve(context.Background(), "127.0.0.1", "")
+	ip, err := Resolve(context.Background(), "127.0.0.1", "", false)
 	if err != nil || !ip.Equal(net.ParseIP("127.0.0.1")) {
 		t.Fatalf("v4 literal: %v %v", ip, err)
 	}
-	if _, err := Resolve(context.Background(), "127.0.0.1", "6"); err == nil {
+	if _, err := Resolve(context.Background(), "127.0.0.1", "6", false); err == nil {
 		t.Fatal("expected error forcing v6 on a v4 literal")
 	}
-	if _, err := Resolve(context.Background(), "::1", "4"); err == nil {
+	if _, err := Resolve(context.Background(), "::1", "4", false); err == nil {
 		t.Fatal("expected error forcing v4 on a v6 literal")
 	}
 }

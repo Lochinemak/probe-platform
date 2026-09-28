@@ -9,6 +9,10 @@
 *.db-wal
 *.db-shm
 agent_token
+# secrets: deploy/.env holds the agent token and the admin password
+.env
+*.env
+!*.env.example
 # misc
 .DS_Store
 *.log

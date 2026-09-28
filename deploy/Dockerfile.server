@@ -10,7 +10,7 @@ RUN npm run build
 # --- agent binaries for every platform (served by the server for self-update);
 #     32-bit MIPS is built softfloat so it runs on FPU-less SoCs like MT7621;
 #     no TARGET* args here so buildx builds this stage once for all platforms ---
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS agents
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS agents
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -29,7 +29,7 @@ RUN set -e; mkdir -p /out/agents; \
     cd /out/agents && sha256sum probe-agent-* > SHA256SUMS
 
 # --- server ---
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
 ARG VERSION=dev
 ARG TARGETOS TARGETARCH
 WORKDIR /src

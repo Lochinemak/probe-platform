@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -127,17 +128,38 @@ func (ac *agentConn) trySend(m protocol.Message) bool {
 	}
 }
 
-func clientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if first, _, _ := strings.Cut(xff, ","); strings.TrimSpace(first) != "" {
-				return strings.TrimSpace(first)
+// clientIP identifies the caller for rate limiting and audit logs.
+//
+// X-Forwarded-For is a list the client starts and every proxy appends to, so
+// its leftmost entry is whatever the client claimed. Only the entries our own
+// proxies added can be trusted: with hops=1 (one reverse proxy, the usual
+// setup) that is the last one. Anything shorter than hops means the header did
+// not come through the expected chain, so we fall back to the peer address.
+func clientIP(r *http.Request, trustProxy bool, hops int) string {
+	direct := remoteHost(r)
+	if !trustProxy {
+		return direct
+	}
+	if hops < 1 {
+		hops = 1
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if i := len(parts) - hops; i >= 0 {
+			if ip := strings.TrimSpace(parts[i]); net.ParseIP(ip) != nil {
+				return ip
 			}
 		}
-		if xr := r.Header.Get("X-Real-IP"); xr != "" {
-			return strings.TrimSpace(xr)
-		}
 	}
+	// Set by the proxy itself (nginx: $remote_addr), so it cannot be forged
+	// through the chain the way the X-Forwarded-For list can.
+	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(xr) != nil {
+		return xr
+	}
+	return direct
+}
+
+func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -164,14 +186,18 @@ func agentIDFromName(name string) string {
 	return id
 }
 
+// checkToken accepts the shared agent secret as a bearer token. The token is
+// deliberately not read from the query string: that would put it in every
+// reverse-proxy access log.
 func (h *Hub) checkToken(r *http.Request) bool {
-	tok := ""
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		tok = strings.TrimPrefix(auth, "Bearer ")
-	} else {
-		tok = r.URL.Query().Get("token")
+	if h.cfg.AgentToken == "" {
+		return false
 	}
-	return tok != "" && tok == h.cfg.AgentToken
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, "Bearer ")), []byte(h.cfg.AgentToken)) == 1
 }
 
 // HandleAgentWS is the WebSocket endpoint agents connect to.
@@ -184,7 +210,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	remoteIP := clientIP(r, h.cfg.TrustProxy)
+	remoteIP := h.cfg.ClientIP(r)
 	conn.SetReadLimit(4 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	var first protocol.Message

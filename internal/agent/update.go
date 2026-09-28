@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +68,37 @@ func (c *Client) maybeUpdate(ctx context.Context, u protocol.Update) {
 	}
 }
 
+// updateTransportOK refuses to replace the running binary unless the download
+// is authenticated. The checksum in the offer comes from the same connection as
+// the bytes, so it only guards against corruption: over plain http, or with
+// certificate checks turned off, anyone on the path could serve a binary that
+// then runs as root (LocalSystem on Windows) on this node. Loopback is allowed
+// so local development still works.
+func (c *Client) updateTransportOK() error {
+	if c.cfg.InsecureTLS {
+		return errors.New("refusing to self-update while TLS verification is disabled (--insecure / PROBE_INSECURE)")
+	}
+	u, err := url.Parse(c.httpBase)
+	if err != nil {
+		return err
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("refusing to self-update over plain http (%s): use an https server URL", c.httpBase)
+}
+
 func (c *Client) selfUpdate(ctx context.Context, u protocol.Update) error {
+	if err := c.updateTransportOK(); err != nil {
+		return err
+	}
 	exe, err := executablePath()
 	if err != nil {
 		return err

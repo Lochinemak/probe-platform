@@ -96,8 +96,10 @@ onMounted(load)
           </div>
         </div>
         <div class="row" style="gap:16px;margin-top:10px">
-          <div class="field grow"><label>允许的管理员（可选，逗号分隔的邮箱 / 用户名 / sub；留空 = 该 Logto 的任何用户）</label><input type="text" v-model="form.logto_admins" spellcheck="false" /></div>
+          <div class="field grow"><label>允许的管理员（逗号分隔的邮箱 / 用户名 / sub；<b>留空则拒绝所有 Logto 登录</b>）</label><input type="text" v-model="form.logto_admins" spellcheck="false" /></div>
         </div>
+        <p class="sub" v-if="view.logto_enabled && !view.logto_admins" style="margin:8px 0 0"><span class="badge warn">名单为空</span>
+          Logto 登录当前会被全部拒绝。这是有意为之：Logto 租户通常允许自助注册，若把空名单当成「所有人都是管理员」，任何人注册一个账号就能拿到本站管理员权限。请填入允许的账号。</p>
         <div class="row" style="margin-top:12px">
           <button class="btn primary" :disabled="busy === 'logto'">保存</button>
           <button class="btn" type="button" @click="testLogto" :disabled="busy === 'test' || !view.logto_enabled">{{ busy === 'test' ? '测试中…' : '测试连接' }}</button>

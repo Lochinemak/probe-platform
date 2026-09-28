@@ -102,6 +102,11 @@ type Params struct {
 	IntervalMs int    `json:"interval_ms,omitempty"` // gap between probes
 	TimeoutMs  int    `json:"timeout_ms,omitempty"`  // per-probe timeout
 	IPVersion  string `json:"ip_version,omitempty"`  // "", "4" or "6"
+	// PublicOnly restricts the probe to globally routable destinations. The
+	// server sets it for every task an anonymous guest starts, so untrusted
+	// callers cannot aim the agents at loopback, a home LAN or cloud metadata.
+	// It is never honoured from client input: the server overwrites it.
+	PublicOnly bool `json:"public_only,omitempty"`
 
 	// ping
 	PacketSize int `json:"packet_size,omitempty"`
@@ -224,12 +229,16 @@ type AlertEvent struct {
 
 // NotifyChannel is a configured notification destination.
 type NotifyChannel struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Type      string            `json:"type"` // telegram, wecom, dingtalk, bark, webhook, smtp, pushdeer, gotify
-	Config    map[string]string `json:"config"`
-	Enabled   bool              `json:"enabled"`
-	CreatedAt time.Time         `json:"created_at"`
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Type    string            `json:"type"` // telegram, wecom, dingtalk, bark, webhook, smtp, pushdeer, gotify
+	Config  map[string]string `json:"config"`
+	Enabled bool              `json:"enabled"`
+	// SecretSet tells the dashboard which credential fields have a stored
+	// value. Those values are never sent back; an empty field on save means
+	// "keep what is stored". Only set on responses.
+	SecretSet map[string]bool `json:"secret_set,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 // SeriesPoint is one (bucketed) point of a monitor chart.

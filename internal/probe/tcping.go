@@ -20,7 +20,7 @@ func TCPing(ctx context.Context, target string, p protocol.Params, progress Prog
 	if err != nil {
 		return nil, err
 	}
-	ip, err := Resolve(ctx, host, p.IPVersion)
+	ip, err := Resolve(ctx, host, p.IPVersion, p.PublicOnly)
 	if err != nil {
 		return nil, err
 	}

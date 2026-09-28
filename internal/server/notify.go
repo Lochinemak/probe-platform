@@ -48,6 +48,24 @@ var ChannelTypes = map[string][]string{
 	"gotify":   {"server", "token", "priority"},
 }
 
+// channelSecretKeys lists, per channel type, the config keys that are
+// credentials. They are write-only over the API: a response reports whether
+// one is set, never its value. A Bark URL is included because the device key
+// lives in its path.
+var channelSecretKeys = map[string]map[string]bool{
+	"telegram": {"bot_token": true},
+	"wecom":    {"webhook_url": true},
+	"dingtalk": {"webhook_url": true, "secret": true},
+	"bark":     {"url": true},
+	"webhook":  {"auth_header": true},
+	"smtp":     {"password": true},
+	"pushdeer": {"pushkey": true},
+	"gotify":   {"token": true},
+}
+
+// isSecretKey reports whether key is a credential for this channel type.
+func isSecretKey(chType, key string) bool { return channelSecretKeys[chType][key] }
+
 // pushdeerDefaultServer is the hosted PushDeer API; self-hosted instances
 // override it with the "server" config key.
 const pushdeerDefaultServer = "https://api2.pushdeer.com"

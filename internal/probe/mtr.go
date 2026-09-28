@@ -60,7 +60,7 @@ func MTR(ctx context.Context, target string, p protocol.Params, progress Progres
 		return nil, fmt.Errorf("unsupported mtr protocol %q (icmp, tcp, udp)", p.Protocol)
 	}
 
-	dst, err := Resolve(ctx, target, p.IPVersion)
+	dst, err := Resolve(ctx, target, p.IPVersion, p.PublicOnly)
 	if err != nil {
 		return nil, err
 	}

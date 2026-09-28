@@ -48,8 +48,9 @@ type sessionAuth struct {
 	settings *Settings
 	ttl      time.Duration
 
-	mu       sync.Mutex
-	attempts map[string][]time.Time
+	mu        sync.Mutex
+	attempts  map[string][]time.Time
+	lastSweep time.Time
 }
 
 func newSessionAuth(settings *Settings) *sessionAuth {
@@ -133,11 +134,18 @@ func (s *sessionAuth) checkPassword(user, pass string) bool {
 	return s.settings.CheckPassword(user, pass)
 }
 
+// maxTrackedIPs caps the rate-limiter table. Entries expire after a minute and
+// are swept, so this is only a backstop against a flood of distinct addresses
+// (IPv6 makes those free); hitting it resets the window rather than letting the
+// map grow without bound.
+const maxTrackedIPs = 20000
+
 // allowAttempt rate-limits login attempts to 10 per minute per IP.
 func (s *sessionAuth) allowAttempt(ip string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+	s.sweepLocked(now)
 	recent := s.attempts[ip][:0]
 	for _, t := range s.attempts[ip] {
 		if now.Sub(t) < time.Minute {
@@ -150,6 +158,24 @@ func (s *sessionAuth) allowAttempt(ip string) bool {
 	}
 	s.attempts[ip] = append(recent, now)
 	return true
+}
+
+// sweepLocked drops addresses whose window has passed. Without it the table
+// only ever shrinks for addresses that come back, so it would grow for as long
+// as the process runs.
+func (s *sessionAuth) sweepLocked(now time.Time) {
+	if now.Sub(s.lastSweep) < 30*time.Second && len(s.attempts) < maxTrackedIPs {
+		return
+	}
+	s.lastSweep = now
+	for ip, ts := range s.attempts {
+		if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= time.Minute {
+			delete(s.attempts, ip)
+		}
+	}
+	if len(s.attempts) >= maxTrackedIPs {
+		s.attempts = map[string][]time.Time{}
+	}
 }
 
 // --- task ownership --------------------------------------------------------

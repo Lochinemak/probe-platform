@@ -200,7 +200,8 @@ server（flag 或环境变量）：
 | `PROBE_GUEST` | `true` | 引导值：允许游客发起拨测、查看结果（「设置」页可改） |
 | `PROBE_LOGTO_ENDPOINT` / `PROBE_LOGTO_APP_ID` / `PROBE_LOGTO_APP_SECRET` / `PROBE_LOGTO_ADMINS` | 空 | 引导值，建议直接在「设置」页配置 |
 | `PROBE_TRUST_PROXY` | `false` | 反向代理后设为 `true` |
-| `PROBE_GEOIP_ONLINE` | `true` | 用 ip-api.com 识别 agent 位置 |
+| `PROBE_PROXY_HOPS` | `1` | 前面有几层反向代理。只有这些代理追加到 `X-Forwarded-For` 的条目才可信，客户端自带的部分一律忽略 |
+| `PROBE_GEOIP_ONLINE` | `true` | 离线库查不到时才调用 ip-api.com（免费接口只有 HTTP，见「安全说明」） |
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
 | `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒） |
 | `PROBE_RETAIN_DAYS` | `90` | 历史保留天数，0 为永久 |
@@ -286,15 +287,20 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 登录相关的配置都在 Dashboard 的「设置」页（管理员可见）修改，保存后立即生效、无需重启；环境变量只作为首次启动的引导值，页面里保存过的项以数据库为准。
 
 - **未配置任何登录方式**（既没有密码也没有 Logto）：开放模式，所有人都是管理员，只适合内网。首次部署请用 `PROBE_ADMIN_PASSWORD` 提供一个引导密码，登录后在「设置 → 管理员密码」里改成自己的（保存为 bcrypt 哈希，之后环境变量里的密码就不再起作用，可以删掉）。
-- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：**目标必须是公网地址**（内网、回环、CGNAT、云元数据 169.254.169.254 等一律拒绝，域名解析到这些地址也拒绝）；HTTP 只能 GET / HEAD，不能自定义请求头和请求体，不能关闭证书校验；DNS 指定的服务器必须是公网地址且只能用 53 端口（DoH 必须 https）；每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。管理员不受这些限制，仍可探测自己的内网。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
 - **管理员**：右上角「管理员登录」。登录后「历史」页显示所有人的记录，并多一列「来源」（管理员用户名 / 游客 + 短 ID / 定时监控）。两种方式：
   - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
-  - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和可选的管理员名单（逗号分隔的邮箱 / 用户名 / sub，留空表示该 Logto 的任何用户都是管理员），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
+  - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和管理员名单（逗号分隔的邮箱 / 用户名 / sub；**留空则拒绝所有 Logto 登录**——Logto 租户通常允许自助注册，把空名单当成「所有人都是管理员」等于把后台交给任何愿意注册的人），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
 - 对应的引导环境变量：`PROBE_ADMIN_USER`、`PROBE_ADMIN_PASSWORD`、`PROBE_GUEST`、`PROBE_LOGTO_ENDPOINT`、`PROBE_LOGTO_APP_ID`、`PROBE_LOGTO_APP_SECRET`、`PROBE_LOGTO_ADMINS`、`PROBE_BASE_URL`、`PROBE_AGENT_IMAGE`。
 - 会话是 HMAC 签名的 Cookie（密钥随机生成并保存在数据库），30 天有效。
 
 ## 安全说明
 
-- Dashboard 能让任意在线节点向任意目标发包，**公网部署必须配置管理员登录并使用 HTTPS**；开放游客访问时请评估被滥用的风险（已有频率与参数限制，仍可 `PROBE_GUEST=false` 关闭）。
-- agent 只接受 server 下发的四种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB）。
-- **所有 agent 目前共用一个 token**（`PROBE_AGENT_TOKEN`）。它只能让持有者以任意名字注册成节点、接收任务、下载 agent 二进制，不能登录 Dashboard 或查看历史。泄露后轮换：改 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）并重启 server，然后逐台改 `/etc/probe-agent.env`（或容器环境变量）再重启 agent；自更新机制不负责分发 token。若节点分散在多个不完全信任的地方，可以考虑改为每节点独立 token 并在 Dashboard 上签发 / 吊销，目前尚未实现。
+- Dashboard 能让任意在线节点向任意目标发包，**公网部署必须配置管理员登录并使用 HTTPS**。
+- **游客只能探测公网目标。** agent 往往跑在别人家的内网和 dashboard 自己所在的云主机上，若不限制，未登录的访客就能借节点读取云元数据、扫内网端口、访问路由器和 NAS 后台。限制分两层：server 在建任务前校验目标（字面量地址直接判断，域名会解析后逐个判断，有一个内网地址就拒绝），agent 在真正连接的地址上再判一次（`public_only`，HTTP 连每一次重定向都查，因此改不动的 DNS 重绑定也无效）。判定标准见 `internal/probe/netpolicy.go`：回环、RFC 1918、链路本地（含 169.254.169.254）、CGNAT、组播、198.18/15、文档与保留网段全部算内网。管理员不受此限。
+- **反向代理后请确认 `PROBE_PROXY_HOPS`。** `X-Forwarded-For` 是客户端起头、每层代理追加的列表，所以只有自己的代理追加的那几个条目可信。server 默认按一层代理取倒数第一个；如果照抄 `deploy/nginx.conf.example`（`proxy_add_x_forwarded_for`）就不用改。取错方向会让登录爆破限制和游客频率限制被一个请求头绕过，审计日志里的 IP 也会是伪造的。
+- agent 只接受 server 下发的五种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB）。
+- **agent 自更新只在可信连接上进行。** 更新提供的 SHA-256 和二进制来自同一条连接，只能防传输损坏，防不了恶意服务端；因此 server 地址是明文 http（回环除外）或开了 `PROBE_INSECURE=true` 时，agent 会拒绝自更新——否则路径上的人就能投递一个以 root / LocalSystem 运行的二进制。
+- **通知渠道的密钥只写不读。** Bot token、SMTP 密码、Webhook 认证头等不会通过 API 返回，页面上只显示「已保存」；保存时留空表示不修改。
+- ip-api.com 的免费接口不支持 HTTPS，所以位置识别改成**先查离线库**，只有查不到才走那次明文请求（`PROBE_GEOIP_ONLINE=false` 可完全关闭）。建议用 `make geoip-db` 下好离线库。
+- **所有 agent 目前共用一个 token**（`PROBE_AGENT_TOKEN`）。它只能让持有者以任意名字注册成节点、接收任务、下载 agent 二进制，不能登录 Dashboard 或查看历史。注意节点 ID 就是节点自报的名字，同名连接会顶掉旧连接：**任何持有 token 的人都能冒用其它节点的名字**，接收本该发给它的任务并回传伪造结果，或注册大量假节点。因此只把 token 给你信任的人，或按下面的方式轮换。泄露后轮换：改 `PROBE_AGENT_TOKEN`（生产实例在 `/opt/probe-platform/.env`）并重启 server，然后逐台改 `/etc/probe-agent.env`（或容器环境变量）再重启 agent；自更新机制不负责分发 token。若节点分散在多个不完全信任的地方，可以考虑改为每节点独立 token 并在 Dashboard 上签发 / 吊销，目前尚未实现。

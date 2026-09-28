@@ -243,13 +243,15 @@ func (g *GeoIP) LookupAgent(ipStr string) (loc, isp string) {
 	}
 	g.mu.Unlock()
 
-	if g.online {
-		loc, isp = g.lookupIPAPI(ipStr)
+	// Offline first: the free ip-api.com endpoint is plain HTTP only (its TLS
+	// endpoint needs a paid key), so every online lookup puts a node's public
+	// IP on the wire in the clear and lets anyone on the path forge the answer.
+	// With a local database most addresses never need the network call.
+	if raw := g.offlineRaw(ip); raw != "" {
+		loc, isp = splitRegion(raw)
 	}
-	if loc == "" {
-		if raw := g.offlineRaw(ip); raw != "" {
-			loc, isp = splitRegion(raw)
-		}
+	if loc == "" && g.online {
+		loc, isp = g.lookupIPAPI(ipStr)
 	}
 	if loc != "" || isp != "" {
 		g.mu.Lock()
