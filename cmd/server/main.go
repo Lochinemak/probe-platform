@@ -59,10 +59,16 @@ func main() {
 	}
 	defer store.Close()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	geo := server.NewGeoIP(cfg, log)
 	files := server.NewAgentFiles(cfg.AgentsDir, log)
 	hub := server.NewHub(cfg, store, geo, files, log)
-	handler := server.NewHandler(cfg, hub, store, web.Dist(), log)
+	notifier := server.NewNotifier(log)
+	sched := server.NewScheduler(store, hub, notifier, cfg.BaseURL, log)
+	go sched.Run(ctx)
+	handler := server.NewHandler(cfg, hub, store, web.Dist(), sched, notifier, log)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -79,8 +85,6 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -11,10 +11,11 @@ const loading = ref(false)
 const current = ref(null) // snapshot { task, results }
 const page = ref(0)
 const pageSize = 50
+const showMonitors = ref(false)
 
 async function load() {
   loading.value = true
-  try { tasks.value = (await api.tasks(pageSize, page.value * pageSize)).tasks } catch (e) { if (e.status !== 401) error.value = e.message } finally { loading.value = false }
+  try { tasks.value = (await api.tasks(pageSize, page.value * pageSize, showMonitors.value ? '*' : '')).tasks } catch (e) { if (e.status !== 401) error.value = e.message } finally { loading.value = false }
 }
 async function open(id) {
   error.value = ''
@@ -44,6 +45,7 @@ onMounted(() => { load(); if (props.initialId) open(props.initialId) })
         <button class="btn sm" :disabled="page === 0" @click="page--; load()">上一页</button>
         <span class="sub">第 {{ page + 1 }} 页</span>
         <button class="btn sm" :disabled="tasks.length < pageSize" @click="page++; load()">下一页</button>
+        <label class="field inline sub"><input type="checkbox" v-model="showMonitors" @change="page = 0; load()" /> 含定时监控的运行</label>
         <button class="btn sm" @click="load">刷新</button>
       </div>
       <div class="table-wrap">

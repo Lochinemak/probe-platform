@@ -141,7 +141,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Status != protocol.StatusDone || string(list[0].Data) != `{"ip":"1.1.1.1"}` {
 		t.Fatalf("results: %v %+v", err, list)
 	}
-	tasks, err := st.ListTasks(10, 0)
+	tasks, err := st.ListTasks(10, 0, "")
 	if err != nil || len(tasks) != 1 || tasks[0].Params.Count != 3 {
 		t.Fatalf("tasks: %v %+v", err, tasks)
 	}
@@ -162,7 +162,7 @@ func TestAPIAuthGate(t *testing.T) {
 	defer st.Close()
 	cfg := Config{AdminPassword: "pw", AgentToken: "tok", TaskTimeout: time.Minute}
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
-	h := NewHandler(cfg, hub, st, emptyFS{}, discardLogger())
+	h := NewHandler(cfg, hub, st, emptyFS{}, nil, nil, discardLogger())
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 

@@ -12,18 +12,20 @@ import (
 // Config is the server configuration. Every field maps to a flag and an
 // environment variable (PROBE_*).
 type Config struct {
-	Listen        string
-	DataDir       string
-	AgentToken    string
-	AdminPassword string
-	TrustProxy    bool          // honour X-Forwarded-For / X-Real-IP
-	GeoIPOnline   bool          // look up agent public IPs via ip-api.com
-	IP2RegionDB   string        // path to ip2region xdb for offline hop annotation
-	TaskTimeout   time.Duration // hard cap for a task across all agents
-	RetainDays    int           // history retention; 0 keeps forever
-	LogLevel      string
-	AgentImage    string // agent docker image shown on the dashboard's onboarding page
-	AgentsDir     string // directory with probe-agent-<os>-<arch> binaries served for self-update
+	Listen            string
+	DataDir           string
+	AgentToken        string
+	AdminPassword     string
+	TrustProxy        bool          // honour X-Forwarded-For / X-Real-IP
+	GeoIPOnline       bool          // look up agent public IPs via ip-api.com
+	IP2RegionDB       string        // path to ip2region xdb for offline hop annotation
+	TaskTimeout       time.Duration // hard cap for a task across all agents
+	RetainDays        int           // history retention; 0 keeps forever
+	LogLevel          string
+	AgentImage        string        // agent docker image shown on the dashboard's onboarding page
+	AgentsDir         string        // directory with probe-agent-<os>-<arch> binaries served for self-update
+	BaseURL           string        // public dashboard URL, used for links in notifications
+	MonitorTaskRetain time.Duration // how long to keep per-run details of scheduled monitors
 }
 
 func envOr(key, def string) string {
@@ -66,9 +68,12 @@ func LoadConfig(args []string) Config {
 	timeout := fs.Int("task-timeout", envInt("PROBE_TASK_TIMEOUT", 180), "seconds before an unfinished task is failed")
 	fs.IntVar(&c.RetainDays, "retain-days", envInt("PROBE_RETAIN_DAYS", 90), "delete task history older than this many days (0 = keep)")
 	fs.StringVar(&c.LogLevel, "log-level", envOr("PROBE_LOG_LEVEL", "info"), "debug|info|warn|error")
+	fs.StringVar(&c.BaseURL, "base-url", envOr("PROBE_BASE_URL", ""), "public dashboard URL for links in notifications, e.g. https://probe.example.com")
+	monitorRetain := fs.Int("monitor-task-retain-hours", envInt("PROBE_MONITOR_TASK_RETAIN_HOURS", 48), "keep per-run details of scheduled monitors this many hours (samples are kept for retain-days)")
 	fs.StringVar(&c.AgentsDir, "agents-dir", envOr("PROBE_AGENTS_DIR", ""), "directory of probe-agent-<os>-<arch> binaries to serve for agent self-update (empty = disabled)")
 	fs.StringVar(&c.AgentImage, "agent-image", envOr("PROBE_AGENT_IMAGE", "ghcr.io/lochinemak/probe-agent:latest"), "agent image name shown in the dashboard's install instructions (use a registry mirror here if needed)")
 	_ = fs.Parse(args)
 	c.TaskTimeout = time.Duration(*timeout) * time.Second
+	c.MonitorTaskRetain = time.Duration(*monitorRetain) * time.Hour
 	return c
 }

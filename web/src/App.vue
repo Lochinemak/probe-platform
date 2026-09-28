@@ -4,6 +4,8 @@ import { api } from './api.js'
 import ProbeView from './views/Probe.vue'
 import AgentsView from './views/Agents.vue'
 import HistoryView from './views/History.vue'
+import MonitorsView from './views/Monitors.vue'
+import NotifyView from './views/Notify.vue'
 
 const tab = ref('probe')
 const session = ref(null)
@@ -41,8 +43,10 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
       <div class="brand"><span class="dot"></span> 拨测平台</div>
       <nav class="nav" v-if="session && session.authenticated">
         <button :class="{ active: tab === 'probe' }" @click="tab = 'probe'">拨测</button>
+        <button :class="{ active: tab === 'monitors' }" @click="tab = 'monitors'">监控</button>
         <button :class="{ active: tab === 'agents' }" @click="tab = 'agents'">节点</button>
         <button :class="{ active: tab === 'history' }" @click="tab = 'history'">历史</button>
+        <button :class="{ active: tab === 'notify' }" @click="tab = 'notify'">通知</button>
       </nav>
       <div class="spacer"></div>
       <div class="meta" v-if="session">
@@ -67,6 +71,8 @@ onBeforeUnmount(() => window.removeEventListener('probe:unauthorized', onUnautho
 
     <template v-else>
       <ProbeView v-show="tab === 'probe'" @open-history="openHistory" />
+      <MonitorsView v-if="tab === 'monitors'" @open-history="openHistory" />
+      <NotifyView v-if="tab === 'notify'" />
       <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" />
       <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" />
     </template>

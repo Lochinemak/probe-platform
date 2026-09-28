@@ -36,6 +36,10 @@ type Hub struct {
 	files *AgentFiles // nil when self-update is disabled
 	log   *slog.Logger
 
+	// taskDone is invoked (in its own goroutine) once every agent of a task
+	// has reached a terminal state. Set by the scheduler.
+	taskDone func(protocol.Task, []*protocol.AgentResult)
+
 	mu     sync.RWMutex
 	agents map[string]*agentConn
 	tasks  map[string]*taskRun
@@ -61,6 +65,20 @@ func NewHub(cfg Config, store *Store, geo *GeoIP, files *AgentFiles, log *slog.L
 	}
 	go h.janitor()
 	return h
+}
+
+// SetTaskDoneHook registers the completion callback.
+func (h *Hub) SetTaskDoneHook(fn func(protocol.Task, []*protocol.AgentResult)) { h.taskDone = fn }
+
+// notifyDone snapshots a finished task and hands it to the hook.
+func (h *Hub) notifyDone(tr *taskRun) {
+	if h.taskDone == nil {
+		return
+	}
+	tr.mu.Lock()
+	snap := tr.snapshotLocked()
+	tr.mu.Unlock()
+	go h.taskDone(*snap.Task, snap.Results)
 }
 
 // --- agent connections ------------------------------------------------------
@@ -426,10 +444,11 @@ func (tr *taskRun) broadcastLocked(ev protocol.Event) {
 }
 
 // finishResultLocked moves one agent's result to a terminal state and emits
-// the events. Returns false when it was already terminal.
-func (tr *taskRun) finishResultLocked(res *protocol.AgentResult, status protocol.ResultStatus, errMsg string) bool {
+// the events. changed is false when it was already terminal; finished is true
+// when this call completed the whole task.
+func (tr *taskRun) finishResultLocked(res *protocol.AgentResult, status protocol.ResultStatus, errMsg string) (changed, finished bool) {
 	if res.Status == protocol.StatusDone || res.Status == protocol.StatusError {
-		return false
+		return false, false
 	}
 	now := time.Now()
 	res.Status = status
@@ -450,8 +469,9 @@ func (tr *taskRun) finishResultLocked(res *protocol.AgentResult, status protocol
 			tr.timer.Stop()
 		}
 		tr.broadcastLocked(protocol.Event{Type: "done", Done: true})
+		finished = true
 	}
-	return true
+	return true, finished
 }
 
 func newTaskID() string {
@@ -463,6 +483,11 @@ func newTaskID() string {
 // CreateTask dispatches a probe to the given agents (all online agents when
 // agentIDs is empty) and returns the initial snapshot.
 func (h *Hub) CreateTask(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string) (*protocol.Event, error) {
+	return h.CreateTaskWithMonitor(typ, target, params, agentIDs, "")
+}
+
+// CreateTaskWithMonitor is CreateTask for a scheduled monitor run.
+func (h *Hub) CreateTaskWithMonitor(typ protocol.TaskType, target string, params protocol.Params, agentIDs []string, monitorID string) (*protocol.Event, error) {
 	if !typ.Valid() {
 		return nil, errors.New("invalid task type")
 	}
@@ -489,7 +514,7 @@ func (h *Hub) CreateTask(typ protocol.TaskType, target string, params protocol.P
 		return nil, errors.New("no agents online")
 	}
 
-	task := protocol.Task{ID: newTaskID(), Type: typ, Target: target, Params: params, CreatedAt: time.Now(), AgentIDs: agentIDs}
+	task := protocol.Task{ID: newTaskID(), Type: typ, Target: target, Params: params, CreatedAt: time.Now(), AgentIDs: agentIDs, MonitorID: monitorID}
 	tr := &taskRun{
 		task:    task,
 		results: map[string]*protocol.AgentResult{},
@@ -568,7 +593,12 @@ func (h *Hub) CreateTask(typ protocol.TaskType, target string, params protocol.P
 			}
 		}
 	}
-	h.log.Info("task created", "task", task.ID, "type", typ, "target", target, "agents", len(agentIDs), "dispatched", tr.pending)
+	if monitorID == "" {
+		h.log.Info("task created", "task", task.ID, "type", typ, "target", target, "agents", len(agentIDs), "dispatched", tr.pending)
+	}
+	if snap.Done {
+		h.notifyDone(tr)
+	}
 	return &snap, nil
 }
 
@@ -630,13 +660,16 @@ func (h *Hub) handleResult(ac *agentConn, r protocol.Result) {
 	if !r.OK {
 		status = protocol.StatusError
 	}
-	changed := tr.finishResultLocked(res, status, r.Error)
+	changed, finished := tr.finishResultLocked(res, status, r.Error)
 	copyRes := *res
 	tr.mu.Unlock()
 	if changed {
 		if err := h.store.UpsertResult(&copyRes); err != nil {
 			h.log.Error("store result", "err", err)
 		}
+	}
+	if finished {
+		h.notifyDone(tr)
 	}
 }
 
@@ -648,11 +681,14 @@ func (h *Hub) failAgentResult(tr *taskRun, ac *agentConn, reason string) {
 		tr.mu.Unlock()
 		return
 	}
-	changed := tr.finishResultLocked(res, protocol.StatusError, reason)
+	changed, finished := tr.finishResultLocked(res, protocol.StatusError, reason)
 	copyRes := *res
 	tr.mu.Unlock()
 	if changed {
 		_ = h.store.UpsertResult(&copyRes)
+	}
+	if finished {
+		h.notifyDone(tr)
 	}
 }
 
@@ -662,19 +698,24 @@ func (h *Hub) failAll(tr *taskRun, reason string) {
 	cancelMsg, _ := protocol.NewMessage(protocol.MsgCancel, map[string]string{"task_id": tr.task.ID})
 	tr.mu.Lock()
 	var changed []*protocol.AgentResult
+	finished := false
 	for _, id := range tr.order {
 		res := tr.results[id]
 		if ac := tr.conns[id]; ac != nil {
 			ac.trySend(cancelMsg)
 		}
-		if tr.finishResultLocked(res, protocol.StatusError, reason) {
+		if ch, fin := tr.finishResultLocked(res, protocol.StatusError, reason); ch {
 			c := *res
 			changed = append(changed, &c)
+			finished = finished || fin
 		}
 	}
 	tr.mu.Unlock()
 	for _, r := range changed {
 		_ = h.store.UpsertResult(r)
+	}
+	if finished {
+		h.notifyDone(tr)
 	}
 }
 
@@ -749,13 +790,26 @@ func (h *Hub) janitor() {
 			}
 		}
 		h.mu.Unlock()
-		if h.cfg.RetainDays > 0 && now.Sub(lastPrune) > time.Hour {
+		if now.Sub(lastPrune) > time.Hour {
 			lastPrune = now
-			cutoff := now.AddDate(0, 0, -h.cfg.RetainDays)
-			if n, err := h.store.PruneTasks(cutoff); err != nil {
-				h.log.Error("prune tasks", "err", err)
+			if h.cfg.RetainDays > 0 {
+				cutoff := now.AddDate(0, 0, -h.cfg.RetainDays)
+				if n, err := h.store.PruneTasks(cutoff); err != nil {
+					h.log.Error("prune tasks", "err", err)
+				} else if n > 0 {
+					h.log.Info("pruned old tasks", "count", n)
+				}
+				if n, err := h.store.PruneSamples(cutoff); err != nil {
+					h.log.Error("prune samples", "err", err)
+				} else if n > 0 {
+					h.log.Info("pruned old samples", "count", n)
+				}
+			}
+			// Per-run details of scheduled monitors are bulky; keep them briefly.
+			if n, err := h.store.PruneMonitorTasks(now.Add(-h.cfg.MonitorTaskRetain)); err != nil {
+				h.log.Error("prune monitor tasks", "err", err)
 			} else if n > 0 {
-				h.log.Info("pruned old tasks", "count", n)
+				h.log.Info("pruned monitor run details", "count", n)
 			}
 		}
 	}

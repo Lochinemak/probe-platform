@@ -75,7 +75,12 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	st := &Store{db: db}
+	if err := st.migrateMonitors(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate monitors: %w", err)
+	}
+	return st, nil
 }
 
 // Close closes the database.
@@ -195,8 +200,8 @@ func (s *Store) DeleteAgent(id string) error {
 
 // InsertTask stores a new task.
 func (s *Store) InsertTask(t *protocol.Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks (id,type,target,params,agent_ids,created_at) VALUES (?,?,?,?,?,?)`,
-		t.ID, string(t.Type), t.Target, jsonStr(t.Params), jsonStr(nonNil(t.AgentIDs)), unixMs(t.CreatedAt))
+	_, err := s.db.Exec(`INSERT INTO tasks (id,type,target,params,agent_ids,created_at,monitor_id) VALUES (?,?,?,?,?,?,?)`,
+		t.ID, string(t.Type), t.Target, jsonStr(t.Params), jsonStr(nonNil(t.AgentIDs)), unixMs(t.CreatedAt), t.MonitorID)
 	return err
 }
 
@@ -204,7 +209,7 @@ func scanTask(row interface{ Scan(...any) error }) (*protocol.Task, error) {
 	var t protocol.Task
 	var typ, params, agents string
 	var created int64
-	if err := row.Scan(&t.ID, &typ, &t.Target, &params, &agents, &created); err != nil {
+	if err := row.Scan(&t.ID, &typ, &t.Target, &params, &agents, &created, &t.MonitorID); err != nil {
 		return nil, err
 	}
 	t.Type = protocol.TaskType(typ)
@@ -216,19 +221,32 @@ func scanTask(row interface{ Scan(...any) error }) (*protocol.Task, error) {
 
 // GetTask returns one task or ErrNotFound.
 func (s *Store) GetTask(id string) (*protocol.Task, error) {
-	t, err := scanTask(s.db.QueryRow(`SELECT id,type,target,params,agent_ids,created_at FROM tasks WHERE id=?`, id))
+	t, err := scanTask(s.db.QueryRow(`SELECT id,type,target,params,agent_ids,created_at,monitor_id FROM tasks WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return t, err
 }
 
-// ListTasks returns tasks newest first.
-func (s *Store) ListTasks(limit, offset int) ([]*protocol.Task, error) {
+// ListTasks returns tasks newest first. monitorID "" lists ad-hoc tasks only;
+// "*" lists everything; any other value lists that monitor's runs.
+func (s *Store) ListTasks(limit, offset int, monitorID string) ([]*protocol.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`SELECT id,type,target,params,agent_ids,created_at FROM tasks ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	q := `SELECT id,type,target,params,agent_ids,created_at,monitor_id FROM tasks`
+	args := []any{}
+	switch monitorID {
+	case "*":
+	case "":
+		q += ` WHERE monitor_id=''`
+	default:
+		q += ` WHERE monitor_id=?`
+		args = append(args, monitorID)
+	}
+	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

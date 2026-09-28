@@ -6,8 +6,10 @@
 | --- | --- |
 | **ICMP Ping** | 延迟 / 丢包 / 抖动，逐包实时回传 |
 | **TCPing** | TCP 握手延迟、端口连通性 |
-| **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，重定向链 |
-| **MTR** | 原生 Go 实现（不依赖系统 `mtr`），多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
+| **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
+| **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
+| **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
+| **定时监控 + 告警** | 按 30 秒到 24 小时的间隔持续拨测，结果入库并绘制各节点延迟 / 丢包趋势图；阈值 + 连续失败次数触发告警，恢复时再通知；Telegram / 企业微信 / 钉钉 / Bark / Webhook / 邮件 |
 
 ## 架构
 
@@ -105,7 +107,8 @@ docker run -d --name probe-agent --restart unless-stopped \
 
 ```bash
 probe-agent test www.qq.com         # 依次跑 ping / tcping / http / mtr 并打印 JSON
-probe-agent test mtr 1.1.1.1
+probe-agent test mtr 1.1.1.1 protocol=tcp port=443   # 参数用 key=value 追加
+probe-agent test dns www.qq.com dns_server=223.5.5.5
 sudo /var/lib/probe-agent/probe-agent test www.qq.com   # 已用 systemd 安装的机器
 ```
 
@@ -134,6 +137,18 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 
 之后 MTR 每一跳会显示「中国 广东省 深圳市 电信」这类标签。agent 自身的公网 IP 默认通过 ip-api.com 在线识别（可用 `PROBE_GEOIP_ONLINE=false` 关闭）。
 
+## 定时监控与告警
+
+「监控」页新建一个监控：类型、目标、间隔（30 秒 ～ 24 小时）、节点（不选则每次用全部在线节点）、探测参数、告警规则和通知渠道。之后：
+
+- 调度器每 5 秒检查一次到期的监控，像手动拨测一样下发任务；每个节点的结果被压缩成一个样本（延迟、丢包 / 失败率、是否成功、状态码等）写入 `samples` 表。
+- 详情页按 1 小时 ～ 30 天查看各节点的延迟和丢包曲线（超过 6 小时按 5 分钟 / 30 分钟 / 2 小时聚合），点图例可隐藏节点；下面是每个节点的当前状态、告警记录和最近运行（可点开看完整结果）。
+- **失败的定义**：探测出错、ping/tcping 全部丢包、HTTP 断言未通过（状态码 / 关键字 / 耗时）、MTR 未到达目标、DNS 非 NOERROR。在此之上可以再设「丢包 ≥ x%」「延迟 ≥ y ms」。
+- **告警**：某节点连续 N 次失败（默认 2）触发一次「异常」通知，之后不再重复；恢复正常时发一次「恢复」通知并带上持续时长。每个 (监控, 节点) 独立判断。
+- **通知渠道**（「通知」页）：Telegram 机器人、企业微信群机器人、钉钉群机器人（支持加签）、Bark、通用 Webhook（POST JSON `{title, text, at}`，可加认证头）、SMTP 邮件（465 SSL 或 587 STARTTLS）。保存后可发送测试消息。
+- 数据保留：样本随 `PROBE_RETAIN_DAYS`（默认 90 天）；每次运行的完整结果只保留 `PROBE_MONITOR_TASK_RETAIN_HOURS`（默认 48 小时），避免数据库膨胀。设置 `PROBE_BASE_URL` 后通知里会带详情链接。
+- 监控产生的运行默认不出现在「历史」页，勾选「含定时监控的运行」可查看。
+
 ## 生产部署与 CI/CD（当前实例）
 
 - **Dashboard**：`https://probe.geneyuriy.com`，腾讯云主机上以 Docker 运行（`/opt/probe-platform`，文件见 `deploy/prod/`），OpenResty 在宿主机做 TLS 终止与反代，证书由 acme.sh 签发并通过 `--install-cert ... --reloadcmd "systemctl reload openresty"` 自动续期。
@@ -156,6 +171,8 @@ server（flag 或环境变量）：
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
 | `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒） |
 | `PROBE_RETAIN_DAYS` | `90` | 历史保留天数，0 为永久 |
+| `PROBE_BASE_URL` | 空 | Dashboard 公网地址，用于告警通知里的链接 |
+| `PROBE_MONITOR_TASK_RETAIN_HOURS` | `48` | 定时监控每次运行的完整结果保留时长（小时） |
 | `PROBE_AGENTS_DIR` | 空（Docker 镜像内已设） | 存放 `probe-agent-<os>-<arch>` 二进制的目录，用于 agent 自更新与安装脚本下载 |
 | `PROBE_AGENT_IMAGE` | `ghcr.io/lochinemak/probe-agent:latest` | 节点页展示的 Docker 镜像名（大陆可填镜像站地址） |
 
@@ -169,8 +186,13 @@ agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为
 # 对所有在线节点做 tcping
 curl -s -X POST localhost:8080/api/tasks -H 'content-type: application/json' \
   -d '{"type":"tcping","target":"www.qq.com:443","params":{"count":5}}'
-# 指定节点
-curl -s -X POST localhost:8080/api/tasks -d '{"type":"mtr","target":"1.1.1.1","agent_ids":["home-shenzhen"]}'
+# 指定节点，TCP 模式的 MTR
+curl -s -X POST localhost:8080/api/tasks -d '{"type":"mtr","target":"1.1.1.1","params":{"protocol":"tcp","port":443},"agent_ids":["home-shenzhen"]}'
+# DNS 对比
+curl -s -X POST localhost:8080/api/tasks -d '{"type":"dns","target":"www.qq.com","params":{"dns_server":"223.5.5.5"}}'
+# 定时监控与通知渠道
+curl -s localhost:8080/api/monitors; curl -s localhost:8080/api/notify; curl -s localhost:8080/api/alerts
+curl -s "localhost:8080/api/monitors/<id>/series?range=24h'
 # 实时结果（SSE：snapshot → progress* → result* → done）
 curl -N localhost:8080/api/tasks/<id>/events
 # 历史
@@ -193,13 +215,18 @@ curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/download/
 | `port` | tcping | 目标里没写端口时使用，默认 80 |
 | `method` / `headers` / `body` / `follow_redirects` / `insecure_tls` | http | |
 | `max_hops` / `resolve` | mtr | 最大跳数（默认 30）、是否反向解析 |
+| `protocol` / `port` | mtr | `icmp`（默认）、`tcp`（SYN，默认 80 端口）、`udp`（默认 33434） |
+| `expect_status` / `expect_keyword` / `expect_max_ms` | http | 断言：状态码（0 = 任意 < 400）、响应体关键字、总耗时上限 |
+| `speed_test` / `speed_seconds` | http | 下载测速：持续读取指定秒数（默认 5）并计算 Mbps |
+| `record_type` / `dns_server` | dns | 记录类型（默认 A）；服务器留空用节点系统 DNS，可填 `223.5.5.5`、`223.5.5.5:53`、`tcp://1.1.1.1`、`https://doh.pub/dns-query` |
 
 ## 项目结构
 
 ```
 cmd/server, cmd/agent      入口
 internal/protocol          server / agent / 前端共享的消息与结果类型
-internal/probe             ping（pro-bing）、tcping、http（httptrace）、mtr（原生 ICMP）
+internal/probe             ping（pro-bing）、tcping、http（httptrace + 断言 + 测速）、mtr（ICMP / TCP / UDP 引擎）、dns
+internal/server            另含 scheduler（定时监控与告警状态机）、notify（六种通知渠道）
 internal/agent             WebSocket 客户端、任务执行、重连
 internal/server            hub（连接与任务调度）、SQLite 存储、HTTP/SSE API、鉴权、GeoIP
 web/                       Vue 3 + Vite 前端，构建后由 server embed

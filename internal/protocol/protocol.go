@@ -140,6 +140,107 @@ type Task struct {
 	CreatedAt time.Time `json:"created_at"`
 	// AgentIDs is the set of agents the task was dispatched to.
 	AgentIDs []string `json:"agent_ids,omitempty"`
+	// MonitorID is set when the task was created by a scheduled monitor.
+	MonitorID string `json:"monitor_id,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled monitoring
+// ---------------------------------------------------------------------------
+
+// AlertRule decides when a monitor's result for one agent counts as failing.
+// A probe error, total loss, a failed HTTP assertion, an unreached MTR
+// destination or a non-success DNS rcode always fail; the thresholds add to
+// that. Consecutive failures are required before an alert fires.
+type AlertRule struct {
+	Enabled     bool    `json:"enabled"`
+	LossPct     float64 `json:"loss_pct,omitempty"`    // fail when loss >= this (0 = ignore)
+	LatencyMs   float64 `json:"latency_ms,omitempty"`  // fail when latency >= this (0 = ignore)
+	Consecutive int     `json:"consecutive,omitempty"` // default 2
+}
+
+// Monitor is a probe that runs on a schedule.
+type Monitor struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Type        TaskType   `json:"type"`
+	Target      string     `json:"target"`
+	Params      Params     `json:"params"`
+	AgentIDs    []string   `json:"agent_ids"` // empty = every online agent
+	IntervalSec int        `json:"interval_sec"`
+	Enabled     bool       `json:"enabled"`
+	Alert       AlertRule  `json:"alert"`
+	NotifyIDs   []string   `json:"notify_ids"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LastRunAt   *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt   *time.Time `json:"next_run_at,omitempty"`
+}
+
+// Sample is one monitor run summarised for one agent: a latency, a loss
+// percentage and an ok flag regardless of probe type, plus a few extras.
+type Sample struct {
+	MonitorID      string    `json:"monitor_id"`
+	AgentID        string    `json:"agent_id"`
+	At             time.Time `json:"at"`
+	TaskID         string    `json:"task_id,omitempty"`
+	OK             bool      `json:"ok"`
+	Error          string    `json:"error,omitempty"`
+	LatencyMs      float64   `json:"latency_ms"` // -1 when nothing answered
+	LossPct        float64   `json:"loss_pct"`
+	StatusCode     int       `json:"status_code,omitempty"`
+	Reached        bool      `json:"reached,omitempty"`
+	ThroughputMbps float64   `json:"throughput_mbps,omitempty"`
+}
+
+// MonitorAgentState is the alerting state machine for one (monitor, agent).
+type MonitorAgentState struct {
+	MonitorID string     `json:"monitor_id"`
+	AgentID   string     `json:"agent_id"`
+	AgentName string     `json:"agent_name,omitempty"`
+	Failing   int        `json:"failing"` // consecutive failures so far
+	Alerting  bool       `json:"alerting"`
+	Since     *time.Time `json:"since,omitempty"`
+	LastError string     `json:"last_error,omitempty"`
+	Last      *Sample    `json:"last,omitempty"`
+}
+
+// AlertEvent records an alert firing (down) or clearing (up).
+type AlertEvent struct {
+	ID        int64     `json:"id"`
+	MonitorID string    `json:"monitor_id"`
+	Monitor   string    `json:"monitor,omitempty"`
+	AgentID   string    `json:"agent_id"`
+	Agent     string    `json:"agent,omitempty"`
+	Kind      string    `json:"kind"` // down, up
+	Message   string    `json:"message"`
+	At        time.Time `json:"at"`
+}
+
+// NotifyChannel is a configured notification destination.
+type NotifyChannel struct {
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type"` // telegram, wecom, dingtalk, bark, webhook, smtp
+	Config    map[string]string `json:"config"`
+	Enabled   bool              `json:"enabled"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// SeriesPoint is one (bucketed) point of a monitor chart.
+type SeriesPoint struct {
+	T         int64   `json:"t"` // unix ms
+	LatencyMs float64 `json:"latency_ms"`
+	LossPct   float64 `json:"loss_pct"`
+	OKRatio   float64 `json:"ok_ratio"` // 0..1 within the bucket
+	Count     int     `json:"n"`
+}
+
+// Series is one agent's line on a monitor chart.
+type Series struct {
+	AgentID   string        `json:"agent_id"`
+	AgentName string        `json:"agent_name"`
+	Points    []SeriesPoint `json:"points"`
 }
 
 // Progress is a partial result streamed while a probe runs.

@@ -31,11 +31,14 @@ type API struct {
 	static fs.FS
 	files  *AgentFiles
 	log    *slog.Logger
+
+	sched    *Scheduler // nil in tests / when disabled
+	notifier *Notifier
 }
 
 // NewHandler wires every route.
-func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logger) http.Handler {
-	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(cfg.AdminPassword), static: static, files: hub.files, log: log}
+func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
+	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(cfg.AdminPassword), static: static, files: hub.files, log: log, sched: sched, notifier: notifier}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/agent", hub.HandleAgentWS)
 	mux.HandleFunc("GET /api/health", a.health)
@@ -49,6 +52,20 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, log *slog.Logg
 	mux.Handle("GET /api/tasks/{id}", a.protect(a.getTask))
 	mux.Handle("GET /api/tasks/{id}/events", a.protect(a.taskEvents))
 	mux.Handle("POST /api/tasks/{id}/cancel", a.protect(a.cancelTask))
+	mux.Handle("GET /api/monitors", a.protect(a.listMonitors))
+	mux.Handle("POST /api/monitors", a.protect(a.createMonitor))
+	mux.Handle("GET /api/monitors/{id}", a.protect(a.getMonitor))
+	mux.Handle("PUT /api/monitors/{id}", a.protect(a.updateMonitor))
+	mux.Handle("DELETE /api/monitors/{id}", a.protect(a.deleteMonitor))
+	mux.Handle("POST /api/monitors/{id}/run", a.protect(a.runMonitor))
+	mux.Handle("GET /api/monitors/{id}/series", a.protect(a.monitorSeries))
+	mux.Handle("GET /api/monitors/{id}/alerts", a.protect(a.monitorAlerts))
+	mux.Handle("GET /api/alerts", a.protect(a.listAlerts))
+	mux.Handle("GET /api/notify", a.protect(a.listChannels))
+	mux.Handle("POST /api/notify", a.protect(a.createChannel))
+	mux.Handle("PUT /api/notify/{id}", a.protect(a.updateChannel))
+	mux.Handle("DELETE /api/notify/{id}", a.protect(a.deleteChannel))
+	mux.Handle("POST /api/notify/{id}/test", a.protect(a.testChannel))
 	mux.Handle("GET /api/agent/token", a.protect(a.agentToken))
 	mux.Handle("GET /api/agent/version", a.protectAgentOrSession(a.agentVersion))
 	mux.Handle("GET /api/agent/download/{key}", a.protectAgentOrSession(a.agentDownload))
@@ -261,7 +278,7 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	tasks, err := a.store.ListTasks(limit, offset)
+	tasks, err := a.store.ListTasks(limit, offset, r.URL.Query().Get("monitor"))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
