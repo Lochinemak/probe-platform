@@ -142,6 +142,10 @@ func TestGuestParamsAreAPolicyNotADefault(t *testing.T) {
 
 func TestValidateGuestTarget(t *testing.T) {
 	ctx := context.Background()
+	// Literal addresses only: a hostname would make the result depend on
+	// what the machine running the tests resolves it to. The
+	// name-resolution branches are covered deterministically in
+	// TestCheckPublicHostResolution.
 	refuse := []struct {
 		typ    protocol.TaskType
 		target string
@@ -150,7 +154,6 @@ func TestValidateGuestTarget(t *testing.T) {
 		{protocol.TaskPing, "127.0.0.1", protocol.Params{}},
 		{protocol.TaskPing, "169.254.169.254", protocol.Params{}},                           // cloud metadata
 		{protocol.TaskHTTP, "http://169.254.169.254/latest/meta-data/", protocol.Params{}},  // the real prize
-		{protocol.TaskHTTP, "http://metadata.tencentyun.com/", protocol.Params{}},           // resolves privately
 		{protocol.TaskHTTP, "192.168.1.1", protocol.Params{}},                               // scheme added, still private
 		{protocol.TaskTCPing, "10.2.0.195:22", protocol.Params{}},                           // LAN port scan
 		{protocol.TaskTCPing, "[::1]:8080", protocol.Params{}},                              //
