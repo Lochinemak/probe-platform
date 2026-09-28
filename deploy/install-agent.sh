@@ -9,8 +9,9 @@
 # Or with a local binary:
 #   sudo PROBE_SERVER=... PROBE_TOKEN=... ./install-agent.sh ./probe-agent-linux-arm64
 #
-# The binary lives in /var/lib/probe-agent so the agent can update itself when
-# the dashboard is upgraded. Re-running this script is safe.
+# The binary lives in /var/lib/probe-agent (owned by a dedicated probe-agent
+# user) so the agent can update itself when the dashboard is upgraded.
+# Re-running this script is safe.
 set -eu
 
 : "${PROBE_SERVER:?PROBE_SERVER is required}"
@@ -51,8 +52,27 @@ fi
 chmod 755 "$BIN_SRC"
 "$BIN_SRC" version >/dev/null || { echo "downloaded binary does not run on this host" >&2; exit 1; }
 
+# Dedicated unprivileged system user. (DynamicUser= is deliberately not used:
+# it moves the state dir under /var/lib/private, which the service user cannot
+# traverse to exec the binary.)
+SVC_USER=probe-agent
+if ! id -u "$SVC_USER" >/dev/null 2>&1; then
+  useradd --system --user-group --home-dir "$BIN_DIR" --no-create-home --shell /usr/sbin/nologin "$SVC_USER" 2>/dev/null \
+    || adduser --system --group --home "$BIN_DIR" --no-create-home --shell /usr/sbin/nologin "$SVC_USER" 2>/dev/null \
+    || { addgroup -S "$SVC_USER" 2>/dev/null; adduser -S -D -H -h "$BIN_DIR" -s /sbin/nologin -G "$SVC_USER" "$SVC_USER"; } \
+    || { echo "could not create user $SVC_USER" >&2; exit 1; }
+fi
+
+systemctl stop probe-agent 2>/dev/null || true
+# Undo the DynamicUser= private-dir layout written by an earlier version of this script.
+if [ -L "$BIN_DIR" ]; then
+  rm -f "$BIN_DIR"
+  [ -d /var/lib/private/probe-agent ] && mv /var/lib/private/probe-agent "$BIN_DIR"
+fi
 install -d -m 0755 "$BIN_DIR"
 install -m 0755 "$BIN_SRC" "$BIN_DIR/probe-agent"
+rm -f "$BIN_DIR"/.probe-agent-update-* 2>/dev/null || true
+chown -R "$SVC_USER:$SVC_USER" "$BIN_DIR"
 # Legacy location from earlier installs.
 [ -f /usr/local/bin/probe-agent ] && rm -f /usr/local/bin/probe-agent
 
@@ -75,12 +95,13 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/probe-agent.env
-# Binary lives in the writable StateDirectory so self-update can replace it.
+User=probe-agent
+Group=probe-agent
+# Binary lives in the service user's writable state dir so self-update can replace it.
 StateDirectory=probe-agent
 ExecStart=/var/lib/probe-agent/probe-agent
 Restart=always
 RestartSec=5
-DynamicUser=yes
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=yes

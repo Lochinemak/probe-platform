@@ -52,7 +52,17 @@ PROBE_ADMIN_PASSWORD=你的密码 ./bin/probe-server --listen :8080 --data ./dat
 
 ### 3. 接入 agent
 
-**Docker（群晖 / QNAP / Unraid / 任意有 Docker 的机器）**
+**Linux + systemd 一条命令**（推荐，之后随 dashboard 自动更新）：
+
+```bash
+curl -fsSL https://probe.example.com/install-agent.sh | sudo \
+  PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<data/agent_token 的内容> \
+  PROBE_NAME=home-shenzhen PROBE_LOCATION="广东 深圳" PROBE_ISP=电信 sh
+```
+
+脚本会按 CPU 架构从 dashboard 下载对应二进制（amd64 / arm64 / armv7 / armv6 / 386 / riscv64 / mips64le），装到 `/var/lib/probe-agent/`（归专用的 `probe-agent` 系统用户所有），写 `/etc/probe-agent.env`，安装 systemd unit（非 root 运行，`AmbientCapabilities=CAP_NET_RAW` 提供 ICMP / MTR 所需的 raw socket）。重复执行即升级或改配置。
+
+**Docker**（群晖 / QNAP / Unraid / 任意有 Docker 的机器）：
 
 ```bash
 docker run -d --name probe-agent --restart unless-stopped \
@@ -63,41 +73,32 @@ docker run -d --name probe-agent --restart unless-stopped \
   ghcr.91856478.xyz/lochinemak/probe-agent:latest   # 镜像站；源站为 ghcr.io/lochinemak/probe-agent
 ```
 
-`--network host` 让探测走宿主机真实网络栈；`--cap-add NET_RAW` 是 ICMP ping / MTR 需要的 raw socket 权限。
-
-**二进制 + systemd（Linux）**
-
-一条命令（脚本会安装二进制、写 `/etc/probe-agent.env`、装 unit 并启动；重复执行即升级）：
-
-```bash
-scp bin/probe-agent-linux-amd64 deploy/install-agent.sh user@nas:/tmp/
-ssh user@nas "sudo sh -c 'PROBE_SERVER=https://probe.example.com PROBE_TOKEN=<token> PROBE_NAME=home-sz PROBE_LOCATION=\"广东 深圳\" PROBE_ISP=电信 sh /tmp/install-agent.sh /tmp/probe-agent-linux-amd64'"
-```
-
-或者手动：
-
-```bash
-sudo install -m755 bin/probe-agent-linux-arm64 /usr/local/bin/probe-agent
-sudo setcap cap_net_raw+ep /usr/local/bin/probe-agent
-sudo tee /etc/probe-agent.env >/dev/null <<'ENV'
-PROBE_SERVER=https://probe.example.com
-PROBE_TOKEN=<token>
-PROBE_NAME=tencent-gz
-PROBE_LOCATION=广东 广州
-PROBE_ISP=腾讯云
-ENV
-sudo cp deploy/probe-agent.service /etc/systemd/system/
-sudo systemctl enable --now probe-agent
-```
+`--network host` 让探测走宿主机真实网络栈；`--cap-add NET_RAW` 是 ICMP ping / MTR 需要的 raw socket 权限。容器里默认关闭自更新，升级靠拉新镜像（可以用 Watchtower 自动做）。
 
 **先本地验证探测能力**（不需要 server）：
 
 ```bash
 probe-agent test www.qq.com         # 依次跑 ping / tcping / http / mtr 并打印 JSON
 probe-agent test mtr 1.1.1.1
+sudo /var/lib/probe-agent/probe-agent test www.qq.com   # 已用 systemd 安装的机器
 ```
 
 节点页会显示每个 agent 检测到的能力（`icmp_raw` / `mtr` / `ipv6`）。没有 raw socket 权限时 MTR 不可用，ping 会退回到非特权 ICMP（Linux 需要 `net.ipv4.ping_group_range` 覆盖运行用户的 gid）。
+
+### 3.1 agent 自动更新
+
+server 镜像里自带所有平台的 agent 二进制（`PROBE_AGENTS_DIR`，Docker 镜像默认 `/usr/share/probe-platform/agents`）。流程：
+
+1. agent 连上时上报自己的版本；server 发现与自身版本不一致，且有该平台的二进制，就下发 `update` 消息。
+2. agent 随机等待 0～20 秒（避免全网节点同时下载），从 `/api/agent/download/<os>-<arch>` 下载到二进制所在目录，校验 sha256 和大小，运行一次 `version` 确认新文件能执行并且版本正确。
+3. 等当前任务跑完（最多 60 秒），把旧文件改名为 `probe-agent.prev`，新文件原子替换，然后原地 `exec` 重启（PID 不变，systemd 无感知，ambient capabilities 保留）。
+4. 失败会记录日志并在 10 分钟内不再重试；旧版本继续工作。
+
+所以 dashboard 每次通过 CI/CD 更新后，server 重启导致所有 agent 重连，几十秒内全网节点自动跟上。语义是「与 server 版本保持一致」，回滚 server 时 agent 也会跟着回滚。
+
+- 只有真实构建（版本号不是 `dev`）之间才会触发。
+- `PROBE_SELF_UPDATE=false` 关闭；Docker 镜像里默认关闭。
+- 早期用 `/usr/local/bin` + setcap 方式安装的节点重新跑一次安装脚本即可迁移到新布局。
 
 ### 4. 可选：MTR 每跳地区标注
 
@@ -129,8 +130,10 @@ server（flag 或环境变量）：
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
 | `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒） |
 | `PROBE_RETAIN_DAYS` | `90` | 历史保留天数，0 为永久 |
+| `PROBE_AGENTS_DIR` | 空（Docker 镜像内已设） | 存放 `probe-agent-<os>-<arch>` 二进制的目录，用于 agent 自更新与安装脚本下载 |
+| `PROBE_AGENT_IMAGE` | `ghcr.io/lochinemak/probe-agent:latest` | 节点页展示的 Docker 镜像名（大陆可填镜像站地址） |
 
-agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为节点唯一 ID）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）。
+agent：`PROBE_SERVER`、`PROBE_TOKEN`、`PROBE_NAME`（默认主机名，作为节点唯一 ID）、`PROBE_LOCATION`、`PROBE_ISP`、`PROBE_TAGS`、`PROBE_CONCURRENCY`（默认 4）、`PROBE_INSECURE`（跳过 TLS 校验）、`PROBE_SELF_UPDATE`（默认 `true`）。
 
 ## API
 
@@ -148,6 +151,9 @@ curl -N localhost:8080/api/tasks/<id>/events
 curl localhost:8080/api/tasks?limit=20
 curl localhost:8080/api/tasks/<id>
 curl localhost:8080/api/agents
+# server 自带的 agent 二进制（agent token 或登录态均可访问）
+curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/version
+curl -H "Authorization: Bearer <agent token>" localhost:8080/api/agent/download/linux-arm64 -o probe-agent
 ```
 
 任务参数（`params`）：
@@ -171,10 +177,23 @@ internal/probe             ping（pro-bing）、tcping、http（httptrace）、m
 internal/agent             WebSocket 客户端、任务执行、重连
 internal/server            hub（连接与任务调度）、SQLite 存储、HTTP/SSE API、鉴权、GeoIP
 web/                       Vue 3 + Vite 前端，构建后由 server embed
-deploy/                    Dockerfile、compose、systemd、反向代理示例
+deploy/                    Dockerfile、compose、systemd、安装脚本、反向代理示例；deploy/prod 为当前生产实例的文件
 ```
 
 开发时：`make run-server` 起后端，`cd web && npm run dev` 起前端（已配置代理），`make run-agent` 在本机接一个 agent。
+
+## 在 OpenClash（fake-IP）后面的节点
+
+家里路由器跑 OpenClash 且 DNS 为 fake-IP 模式时，节点上的域名会解析成 `198.18.x.x`，表现为：ping 域名 100% 丢包、HTTP 与 TCPing 走的是 Clash 代理链路而非真实家宽、MTR 到域名没有意义。直接填 IP 的探测基本不受影响（国内 IP 走 DIRECT）。
+
+拨测节点的意义就是测真实网络，所以建议把节点整机绕开代理，两步缺一不可：
+
+1. **让流量不进 Clash**：OpenClash → 插件设置 → 流量控制 → 「局域网访问控制」改为黑名单模式，把节点的内网 IP（或 MAC）加入黑名单。保存并重启 OpenClash 后，这台机器的 TCP/UDP 不再被 iptables 转给 Clash，境外目标也走真实家宽。
+2. **让 DNS 不问路由器**：路由器的 dnsmasq 已经把查询交给了 Clash 的 fake-IP DNS，节点只要还用路由器做 DNS 就仍会拿到假 IP。在节点上把 DNS 改为上游公共 DNS，例如 `223.5.5.5`、`119.29.29.29`。Debian 上改 `/etc/systemd/resolved.conf` 的 `DNS=`（或 `/etc/network/interfaces` / `dhclient.conf` 里的 `supersede domain-name-servers`），群晖在「控制面板 → 网络 → 常规」里手动指定 DNS。
+
+验证：在节点上 `getent hosts www.qq.com` 应返回真实公网 IP 而不是 `198.18.` 开头；dashboard 里对该节点 ping 一个域名不再全丢。
+
+不推荐的做法：把 OpenClash 整体切到 redir-host 模式（影响全家上网体验）、维护 fake-ip-filter 白名单（对任意拨测目标不可维护）、只改 DNS 不加黑名单（OpenClash 通常劫持所有 53 端口流量，换了上游也会被截回来；而且境外目标仍被透明代理）。
 
 ## 安全说明
 

@@ -5,12 +5,13 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/probe-agent.env
-# Binary lives in the writable StateDirectory so self-update can replace it.
+User=probe-agent
+Group=probe-agent
+# Binary lives in the service user's writable state dir so self-update can replace it.
 StateDirectory=probe-agent
 ExecStart=/var/lib/probe-agent/probe-agent
 Restart=always
 RestartSec=5
-DynamicUser=yes
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=yes
