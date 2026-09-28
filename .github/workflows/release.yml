@@ -36,6 +36,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: vars
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - name: agent image
         uses: docker/build-push-action@v6
         with:
@@ -45,8 +47,8 @@ jobs:
           push: true
           build-args: VERSION=${{ github.ref_name }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/probe-agent:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/probe-agent:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-agent:${{ github.ref_name }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-agent:latest
       - name: server image
         uses: docker/build-push-action@v6
         with:
@@ -56,5 +58,5 @@ jobs:
           push: true
           build-args: VERSION=${{ github.ref_name }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/probe-server:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/probe-server:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-server:${{ github.ref_name }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-server:latest

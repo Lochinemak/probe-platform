@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
 
+const props = defineProps({ agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' } })
 const agents = ref([])
 const error = ref('')
 let timer = null
@@ -64,7 +65,7 @@ onBeforeUnmount(() => clearInterval(timer))
   -e PROBE_SERVER={{ serverURL }} \
   -e PROBE_TOKEN=&lt;agent token&gt; \
   -e PROBE_NAME=home-shenzhen -e PROBE_LOCATION="广东 深圳" -e PROBE_ISP=电信 \
-  ghcr.io/&lt;you&gt;/probe-agent:latest</pre>
+  {{ props.agentImage }}</pre>
       </details>
       <details>
         <summary>二进制 + systemd（Linux amd64 / arm64 / armv7）</summary>

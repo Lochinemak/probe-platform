@@ -60,7 +60,7 @@ docker run -d --name probe-agent --restart unless-stopped \
   -e PROBE_SERVER=https://probe.example.com \
   -e PROBE_TOKEN=<data/agent_token 的内容> \
   -e PROBE_NAME=home-shenzhen -e PROBE_LOCATION="广东 深圳" -e PROBE_ISP=电信 \
-  ghcr.io/<you>/probe-agent:latest
+  ghcr.91856478.xyz/lochinemak/probe-agent:latest   # 镜像站；源站为 ghcr.io/lochinemak/probe-agent
 ```
 
 `--network host` 让探测走宿主机真实网络栈；`--cap-add NET_RAW` 是 ICMP ping / MTR 需要的 raw socket 权限。

@@ -3,7 +3,9 @@
 #   docker compose -f docker-compose.agent.yml up -d
 services:
   agent:
-    image: ghcr.io/CHANGE_ME/probe-agent:latest   # or build from deploy/Dockerfile.agent
+    # Origin: ghcr.io/lochinemak/probe-agent. The default below goes through a
+    # registry mirror that is reachable from mainland China.
+    image: ${PROBE_AGENT_IMAGE:-ghcr.91856478.xyz/lochinemak/probe-agent:latest}
     container_name: probe-agent
     restart: unless-stopped
     network_mode: host

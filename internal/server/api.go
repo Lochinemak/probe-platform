@@ -89,6 +89,7 @@ func (a *API) session(w http.ResponseWriter, r *http.Request) {
 		"auth_required": a.auth.enabled,
 		"authenticated": a.auth.authenticated(r),
 		"version":       buildinfo.Version,
+		"agent_image":   a.cfg.AgentImage,
 	})
 }
 

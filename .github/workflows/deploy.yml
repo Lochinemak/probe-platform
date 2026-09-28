@@ -1,0 +1,81 @@
+name: deploy
+# Every push to main: build + push images to ghcr.io, then tell the production
+# host to pull the new server image. The host pulls through a registry mirror,
+# so we deploy by unique sha tag (mirrors may cache "latest").
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: vars
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=main-${{ steps.vars.outputs.tag }}
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-server:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-server:${{ steps.vars.outputs.tag }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+      - name: agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          build-args: VERSION=main-${{ steps.vars.outputs.tag }}
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-agent:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/probe-agent:${{ steps.vars.outputs.tag }}
+          cache-from: type=gha,scope=agent
+          cache-to: type=gha,scope=agent,mode=max
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: pull and restart on the production host
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          TAG: ${{ needs.images.outputs.tag }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          ssh-keyscan -p "$PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # The key is restricted on the host to a forced command
+          # (deploy/prod/deploy.sh); the argument arrives as SSH_ORIGINAL_COMMAND.
+          ssh -i ~/.ssh/deploy -p "$PORT" -o ConnectTimeout=20 "$USER@$HOST" "$TAG"

@@ -1,0 +1,19 @@
+# Production dashboard. Lives in /opt/probe-platform on the host together with
+# .env (secrets) and data/ (sqlite, ip2region). OpenResty on the host
+# terminates TLS and proxies to 127.0.0.1:8080.
+services:
+  server:
+    image: ${PROBE_SERVER_IMAGE:-ghcr.91856478.xyz/lochinemak/probe-server}:${IMAGE_TAG:-latest}
+    container_name: probe-server
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file: .env
+    environment:
+      PROBE_DATA_DIR: /data
+      PROBE_TRUST_PROXY: "true"
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }

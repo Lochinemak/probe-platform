@@ -21,6 +21,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 # --- runtime ---
 FROM alpine:3.21
+LABEL org.opencontainers.image.source="https://github.com/Lochinemak/probe-platform"
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 probe
 COPY --from=build /out/probe-server /usr/local/bin/probe-server
 USER probe
