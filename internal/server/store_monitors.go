@@ -215,6 +215,138 @@ func (s *Store) DeleteMonitor(id string) error {
 	return nil
 }
 
+// purgeAgentRefs forgets the given (deleted) agents in monitoring data: their
+// alert state and samples go, and they are dropped from monitors' node lists.
+// A monitor left with no node of its own is disabled instead of silently
+// widening to "all online nodes". Alert events stay as history.
+func purgeAgentRefs(tx *sql.Tx, gone map[string]bool) error {
+	for id := range gone {
+		for _, q := range []string{
+			`DELETE FROM monitor_state WHERE agent_id=?`,
+			`DELETE FROM samples WHERE agent_id=?`,
+		} {
+			if _, err := tx.Exec(q, id); err != nil {
+				return err
+			}
+		}
+	}
+
+	type change struct {
+		id   string
+		kept []string
+	}
+	var changes []change
+	rows, err := tx.Query(`SELECT id, agent_ids FROM monitors WHERE agent_ids<>'[]'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var ids []string
+		_ = json.Unmarshal([]byte(raw), &ids)
+		kept := make([]string, 0, len(ids))
+		for _, a := range ids {
+			if !gone[a] {
+				kept = append(kept, a)
+			}
+		}
+		if len(kept) < len(ids) {
+			changes = append(changes, change{id, kept})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	now := time.Now().UnixMilli()
+	for _, c := range changes {
+		q := `UPDATE monitors SET agent_ids=?, updated_at=? WHERE id=?`
+		if len(c.kept) == 0 {
+			q = `UPDATE monitors SET agent_ids=?, updated_at=?, enabled=0 WHERE id=?`
+		}
+		if _, err := tx.Exec(q, jsonStr(c.kept), now, c.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneOrphanAgentRefs cleans up after nodes that were deleted before
+// DeleteAgent did it: monitoring data still pointing at agents that no longer
+// exist.
+func (s *Store) pruneOrphanAgentRefs() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	gone := map[string]bool{}
+	for _, q := range []string{
+		`SELECT DISTINCT agent_id FROM monitor_state WHERE agent_id NOT IN (SELECT id FROM agents)`,
+		`SELECT DISTINCT agent_id FROM samples WHERE agent_id NOT IN (SELECT id FROM agents)`,
+	} {
+		ids, err := queryStrings(tx, q)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			gone[id] = true
+		}
+	}
+	known, err := queryStrings(tx, `SELECT id FROM agents`)
+	if err != nil {
+		return err
+	}
+	knownSet := map[string]bool{}
+	for _, id := range known {
+		knownSet[id] = true
+	}
+	lists, err := queryStrings(tx, `SELECT agent_ids FROM monitors WHERE agent_ids<>'[]'`)
+	if err != nil {
+		return err
+	}
+	for _, raw := range lists {
+		var ids []string
+		_ = json.Unmarshal([]byte(raw), &ids)
+		for _, id := range ids {
+			if !knownSet[id] {
+				gone[id] = true
+			}
+		}
+	}
+
+	if len(gone) == 0 {
+		return nil
+	}
+	if err := purgeAgentRefs(tx, gone); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// queryStrings runs a single-column query and returns every value.
+func queryStrings(tx *sql.Tx, query string) ([]string, error) {
+	rows, err := tx.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // --- samples ----------------------------------------------------------------
 
 // InsertSample stores one summarised run.

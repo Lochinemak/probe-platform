@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -110,6 +111,11 @@ func (s *Scheduler) onTaskDone(task protocol.Task, results []*protocol.AgentResu
 	now := time.Now()
 	var outcomes []*agentOutcome
 	for _, r := range results {
+		// A node deleted while this run was in flight reports back as failed;
+		// recording that would resurrect its samples and alert state.
+		if _, err := s.store.GetAgent(r.AgentID); errors.Is(err, ErrNotFound) {
+			continue
+		}
 		sm := sampleFromResult(m, r, now)
 		if err := s.store.InsertSample(sm); err != nil {
 			s.log.Error("scheduler: store sample", "err", err)

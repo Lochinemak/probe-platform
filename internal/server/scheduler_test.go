@@ -90,6 +90,11 @@ func TestAlertStateMachine(t *testing.T) {
 	if err := st.UpsertMonitor(m); err != nil {
 		t.Fatal(err)
 	}
+	for _, id := range []string{"a1", "a2", "a3"} {
+		if err := st.UpsertAgent(&protocol.AgentStatus{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg := Config{AgentToken: "tok", TaskTimeout: time.Minute}
 	hub := NewHub(cfg, st, nil, nil, discardLogger())
 	s := NewScheduler(st, hub, NewNotifier(discardLogger()), func() string { return "https://probe.example.com" }, discardLogger())
@@ -242,5 +247,134 @@ func TestSeriesBucketing(t *testing.T) {
 	}
 	if n, _ := st.PruneSamples(base.Add(5 * time.Minute)); n != 6 {
 		t.Fatalf("prune: %d", n)
+	}
+}
+
+// seedAlerting makes agent alert on monitor with a sample and a down event.
+func seedAlerting(t *testing.T, st *Store, monitor, agent string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.InsertSample(&protocol.Sample{MonitorID: monitor, AgentID: agent, At: now, LatencyMs: -1, LossPct: 100, Error: "agent offline"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveState(&protocol.MonitorAgentState{MonitorID: monitor, AgentID: agent, Failing: 5, Alerting: true, Since: &now, LastError: "agent offline"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertAlertEvent(&protocol.AlertEvent{MonitorID: monitor, AgentID: agent, Kind: "down", Message: "x", At: now}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteAgentClearsMonitoring(t *testing.T) {
+	st, err := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, id := range []string{"gone", "stay"} {
+		if err := st.UpsertAgent(&protocol.AgentStatus{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk := func(id string, agents ...string) {
+		m := &protocol.Monitor{ID: id, Name: id, Type: protocol.TaskPing, Target: "1.1.1.1", IntervalSec: 60, Enabled: true, AgentIDs: agents,
+			Alert: protocol.AlertRule{Enabled: true, Consecutive: 2}}
+		if err := st.UpsertMonitor(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("mixed", "gone", "stay")
+	mk("only", "gone")
+	mk("all") // no explicit nodes: every online node
+	for _, m := range []string{"mixed", "only", "all"} {
+		seedAlerting(t, st, m, "gone")
+	}
+	seedAlerting(t, st, "mixed", "stay")
+
+	if err := st.DeleteAgent("gone"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, _ := st.AlertingCount(); n != 1 {
+		t.Fatalf("alerting count after delete: %d, want 1 (the surviving node)", n)
+	}
+	for _, m := range []string{"mixed", "only", "all"} {
+		if s, _ := st.GetState(m, "gone"); s.Alerting || s.Failing != 0 {
+			t.Fatalf("%s: state for deleted node survived: %+v", m, s)
+		}
+		if latest, _ := st.LatestSamples(m); latest["gone"] != nil {
+			t.Fatalf("%s: sample for deleted node survived", m)
+		}
+	}
+	mixed, _ := st.GetMonitor("mixed")
+	if len(mixed.AgentIDs) != 1 || mixed.AgentIDs[0] != "stay" || !mixed.Enabled {
+		t.Fatalf("mixed: %+v", mixed)
+	}
+	only, _ := st.GetMonitor("only")
+	if len(only.AgentIDs) != 0 || only.Enabled {
+		t.Fatalf("a monitor left without nodes must be disabled, not widened to all nodes: %+v", only)
+	}
+	if all, _ := st.GetMonitor("all"); !all.Enabled {
+		t.Fatalf("monitor on all nodes must stay enabled: %+v", all)
+	}
+	if events, _ := st.ListAlertEvents("mixed", 10); len(events) != 2 {
+		t.Fatalf("alert history should be kept: %+v", events)
+	}
+}
+
+// Nodes deleted by a version that did not clean up are repaired on open.
+func TestOpenStorePrunesOrphanAgentRefs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertAgent(&protocol.AgentStatus{ID: "stay", Name: "stay"}); err != nil {
+		t.Fatal(err)
+	}
+	m := &protocol.Monitor{ID: "m", Name: "m", Type: protocol.TaskPing, Target: "1.1.1.1", IntervalSec: 60, Enabled: true, AgentIDs: []string{"orphan", "stay"}}
+	if err := st.UpsertMonitor(m); err != nil {
+		t.Fatal(err)
+	}
+	seedAlerting(t, st, "m", "orphan")
+	seedAlerting(t, st, "m", "stay")
+	st.Close()
+
+	st, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if n, _ := st.AlertingCount(); n != 1 {
+		t.Fatalf("alerting count: %d, want 1", n)
+	}
+	if got, _ := st.GetMonitor("m"); len(got.AgentIDs) != 1 || got.AgentIDs[0] != "stay" {
+		t.Fatalf("agent ids: %+v", got.AgentIDs)
+	}
+}
+
+// A node deleted while a monitor run is in flight comes back as a failed
+// result; it must not bring the alert back.
+func TestTaskDoneIgnoresDeletedAgent(t *testing.T) {
+	st, err := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	m := &protocol.Monitor{ID: "m", Name: "m", Type: protocol.TaskPing, Target: "1.1.1.1", IntervalSec: 60, Enabled: true,
+		Alert: protocol.AlertRule{Enabled: true, Consecutive: 1}}
+	if err := st.UpsertMonitor(m); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(Config{AgentToken: "tok", TaskTimeout: time.Minute}, st, nil, nil, discardLogger())
+	s := NewScheduler(st, hub, NewNotifier(discardLogger()), func() string { return "" }, discardLogger())
+	s.onTaskDone(protocol.Task{ID: "t", MonitorID: "m"}, []*protocol.AgentResult{
+		{TaskID: "t", AgentID: "deleted", Status: protocol.StatusError, Error: "agent disconnected"},
+	})
+	if n, _ := st.AlertingCount(); n != 0 {
+		t.Fatalf("alerting count: %d, want 0", n)
+	}
+	if latest, _ := st.LatestSamples("m"); len(latest) != 0 {
+		t.Fatalf("samples for a deleted node were recorded: %+v", latest)
 	}
 }

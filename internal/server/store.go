@@ -121,7 +121,7 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(monitorSchema); err != nil {
 		return fmt.Errorf("monitors: %w", err)
 	}
-	return nil
+	return s.pruneOrphanAgentRefs()
 }
 
 // ensureColumn adds column to table when the table exists without it and
@@ -347,10 +347,22 @@ func (s *Store) ListAgents() ([]*protocol.AgentStatus, error) {
 	return out, rows.Err()
 }
 
-// DeleteAgent removes an agent record.
+// DeleteAgent removes an agent record together with what monitoring holds for
+// it (alert state, samples, its place in monitors' node lists), so a deleted
+// node cannot keep a monitor in the alerting state.
 func (s *Store) DeleteAgent(id string) error {
-	_, err := s.db.Exec(`DELETE FROM agents WHERE id=?`, id)
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM agents WHERE id=?`, id); err != nil {
+		return err
+	}
+	if err := purgeAgentRefs(tx, map[string]bool{id: true}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- tasks ------------------------------------------------------------------
