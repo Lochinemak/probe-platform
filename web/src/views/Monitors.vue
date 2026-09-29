@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { api } from '../api.js'
-import { typeLabel, timeAgo, ms, pct } from '../fmt.js'
+import { typeLabel, timeAgo, ms, pct, parseHeaders, formatHeaders } from '../fmt.js'
 import MonitorDetail from '../components/MonitorDetail.vue'
 
 const props = defineProps({ initialId: String })
@@ -12,6 +12,7 @@ const channels = ref([])
 const error = ref('')
 const editing = ref(null) // monitor object being edited/created
 const detailId = ref('')
+const headersText = ref('') // custom HTTP headers of the monitor being edited, one "Key: Value" per line
 let timer = null
 
 const intervals = [[30, '30 秒'], [60, '1 分钟'], [120, '2 分钟'], [300, '5 分钟'], [600, '10 分钟'], [900, '15 分钟'], [1800, '30 分钟'], [3600, '1 小时'], [21600, '6 小时'], [86400, '24 小时']]
@@ -29,15 +30,20 @@ async function loadChannels() { try { channels.value = (await api.channels()).ch
 function blank() {
   return {
     name: '', type: 'ping', target: '', interval_sec: 60, enabled: true, agent_ids: [],
-    params: { count: 5, timeout_ms: 2000, port: 80, method: 'GET', follow_redirects: true, record_type: 'A', dns_server: '', protocol: 'icmp', ip_version: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, max_hops: 30 },
+    params: {
+      count: 5, timeout_ms: 2000, interval_ms: '', packet_size: '', port: 80, ip_version: '',
+      method: 'GET', follow_redirects: true, insecure_tls: false, body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0,
+      max_hops: 30, resolve: false, protocol: 'icmp', record_type: 'A', dns_server: '',
+    },
     alert: { enabled: true, loss_pct: 50, latency_ms: 0, consecutive: 2 },
     notify_ids: [],
   }
 }
-function startCreate() { editing.value = blank(); error.value = '' }
+function startCreate() { editing.value = blank(); headersText.value = ''; error.value = '' }
 function startEdit(m) {
   const e = blank()
   editing.value = { ...e, ...JSON.parse(JSON.stringify(m)), params: { ...e.params, ...(m.params || {}) }, alert: { ...e.alert, ...(m.alert || {}) } }
+  headersText.value = formatHeaders(m.params?.headers)
   error.value = ''
 }
 function toggleAgent(id) {
@@ -55,14 +61,18 @@ function cleanParams(e) {
   const keep = {
     ping: ['count', 'timeout_ms', 'interval_ms', 'packet_size', 'ip_version'],
     tcping: ['count', 'timeout_ms', 'interval_ms', 'port', 'ip_version'],
-    http: ['count', 'timeout_ms', 'method', 'follow_redirects', 'insecure_tls', 'expect_status', 'expect_keyword', 'expect_max_ms', 'ip_version'],
-    mtr: ['count', 'timeout_ms', 'max_hops', 'protocol', 'port', 'ip_version'],
+    http: ['count', 'timeout_ms', 'method', 'follow_redirects', 'insecure_tls', 'body', 'expect_status', 'expect_keyword', 'expect_max_ms', 'ip_version'],
+    mtr: ['count', 'timeout_ms', 'max_hops', 'protocol', 'port', 'resolve', 'ip_version'],
     dns: ['count', 'timeout_ms', 'record_type', 'dns_server', 'ip_version'],
   }[e.type]
   const out = {}
   for (const k of keep) if (p[k] !== '' && p[k] !== null && p[k] !== undefined && p[k] !== false && p[k] !== 0) out[k] = p[k]
   if (e.type === 'mtr' && out.protocol === 'icmp') delete out.port
-  if (e.type === 'http' && e.params.follow_redirects === false) delete out.follow_redirects
+  if (e.type === 'http') {
+    if (['GET', 'HEAD'].includes(p.method)) delete out.body
+    const headers = parseHeaders(headersText.value)
+    if (Object.keys(headers).length) out.headers = headers
+  }
   return out
 }
 async function save() {
@@ -119,24 +129,31 @@ onBeforeUnmount(() => clearInterval(timer))
           </div>
 
           <div class="row" style="gap:16px;margin-top:10px">
-            <div class="field"><label>次数</label><input type="number" min="1" max="100" v-model.number="editing.params.count" /></div>
+            <div class="field"><label>次数</label><input type="number" min="1" :max="['http', 'dns'].includes(editing.type) ? 20 : 100" v-model.number="editing.params.count" /></div>
+            <div class="field" v-if="['ping', 'tcping'].includes(editing.type)"><label>间隔 (ms)</label><input type="number" min="100" max="5000" v-model.number="editing.params.interval_ms" placeholder="默认 500" /></div>
             <div class="field"><label>超时 (ms)</label><input type="number" min="200" max="60000" v-model.number="editing.params.timeout_ms" /></div>
+            <div class="field" v-if="editing.type === 'ping'"><label>包大小</label><input type="number" min="24" max="1400" v-model.number="editing.params.packet_size" placeholder="默认 56" /></div>
             <div class="field" v-if="editing.type === 'tcping'"><label>端口</label><input type="number" min="1" max="65535" v-model.number="editing.params.port" /></div>
             <template v-if="editing.type === 'http'">
-              <div class="field"><label>方法</label><select v-model="editing.params.method"><option v-for="m in ['GET', 'HEAD', 'POST']" :key="m">{{ m }}</option></select></div>
+              <div class="field"><label>方法</label><select v-model="editing.params.method"><option v-for="m in ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']" :key="m">{{ m }}</option></select></div>
               <div class="field"><label>期望状态码 (0 = &lt; 400)</label><input type="number" min="0" max="599" v-model.number="editing.params.expect_status" /></div>
               <div class="field"><label>关键字</label><input type="text" v-model="editing.params.expect_keyword" /></div>
               <div class="field"><label>耗时上限 (ms)</label><input type="number" min="0" v-model.number="editing.params.expect_max_ms" /></div>
               <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.params.follow_redirects" /> 跟随重定向</label>
+              <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.params.insecure_tls" /> 忽略证书错误</label>
+              <div class="field" style="flex-basis:100%"></div>
+              <div class="field grow"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="headersText" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>
+              <div class="field grow" v-if="!['GET', 'HEAD'].includes(editing.params.method)"><label>请求体</label><textarea rows="2" v-model="editing.params.body" spellcheck="false"></textarea></div>
             </template>
             <template v-if="editing.type === 'mtr'">
               <div class="field"><label>探针</label><select v-model="editing.params.protocol"><option value="icmp">ICMP</option><option value="tcp">TCP SYN</option><option value="udp">UDP</option></select></div>
               <div class="field" v-if="editing.params.protocol !== 'icmp'"><label>端口</label><input type="number" min="1" max="65535" v-model.number="editing.params.port" /></div>
               <div class="field"><label>最大跳数</label><input type="number" min="1" max="64" v-model.number="editing.params.max_hops" /></div>
+              <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.params.resolve" /> 反向解析主机名</label>
             </template>
             <template v-if="editing.type === 'dns'">
-              <div class="field"><label>记录类型</label><select v-model="editing.params.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS']" :key="t">{{ t }}</option></select></div>
-              <div class="field grow"><label>DNS 服务器（留空用节点默认）</label><input type="text" v-model="editing.params.dns_server" placeholder="223.5.5.5 / https://doh.pub/dns-query" /></div>
+              <div class="field"><label>记录类型</label><select v-model="editing.params.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SOA', 'SRV']" :key="t">{{ t }}</option></select></div>
+              <div class="field grow"><label>DNS 服务器（留空用节点系统 DNS）</label><input type="text" v-model="editing.params.dns_server" placeholder="223.5.5.5 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
             </template>
             <div class="field"><label>IP 版本</label><select v-model="editing.params.ip_version"><option value="">自动</option><option value="4">IPv4</option><option value="6">IPv6</option></select></div>
           </div>

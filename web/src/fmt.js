@@ -82,3 +82,17 @@ export function statusLabel(s) {
 export function agentPlace(r) {
   return [r.location || r.geo_location, r.isp || r.geo_isp].filter(Boolean).join(' · ')
 }
+
+// Custom HTTP headers are edited as one "Key: Value" per line and sent as a map.
+export function parseHeaders(text) {
+  const headers = {}
+  for (const line of String(text || '').split('\n')) {
+    const i = line.indexOf(':')
+    if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+  }
+  return headers
+}
+
+export function formatHeaders(headers) {
+  return Object.entries(headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')
+}

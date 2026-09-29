@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { api, subscribe } from '../api.js'
+import { parseHeaders } from '../fmt.js'
 import TaskResults from '../components/TaskResults.vue'
 
 const props = defineProps({ role: { type: String, default: 'admin' } })
@@ -100,11 +101,7 @@ async function run() {
   if (unsubscribe) { unsubscribe(); unsubscribe = null }
   const p = { ...params[type.value] }
   if (type.value === 'http') {
-    const headers = {}
-    for (const line of httpExtra.headers.split('\n')) {
-      const i = line.indexOf(':')
-      if (i > 0) headers[line.slice(0, i).trim()] = line.slice(i + 1).trim()
-    }
+    const headers = parseHeaders(httpExtra.headers)
     if (Object.keys(headers).length) p.headers = headers
     if (httpExtra.body && !['GET', 'HEAD'].includes(p.method)) p.body = httpExtra.body
     if (httpExtra.expect_status > 0) p.expect_status = httpExtra.expect_status
