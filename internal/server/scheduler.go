@@ -109,11 +109,19 @@ func (s *Scheduler) onTaskDone(task protocol.Task, results []*protocol.AgentResu
 		return // deleted meanwhile
 	}
 	now := time.Now()
+	selected := map[string]bool{}
+	for _, id := range m.AgentIDs {
+		selected[id] = true
+	}
 	var outcomes []*agentOutcome
 	for _, r := range results {
 		// A node deleted while this run was in flight reports back as failed;
 		// recording that would resurrect its samples and alert state.
 		if _, err := s.store.GetAgent(r.AgentID); errors.Is(err, ErrNotFound) {
+			continue
+		}
+		// Likewise a node taken off the monitor while this run was in flight.
+		if len(selected) > 0 && !selected[r.AgentID] {
 			continue
 		}
 		sm := sampleFromResult(m, r, now)

@@ -121,7 +121,10 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(monitorSchema); err != nil {
 		return fmt.Errorf("monitors: %w", err)
 	}
-	return s.pruneOrphanAgentRefs()
+	if err := s.pruneOrphanAgentRefs(); err != nil {
+		return err
+	}
+	return s.PruneDeselectedStates()
 }
 
 // ensureColumn adds column to table when the table exists without it and

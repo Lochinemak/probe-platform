@@ -29,15 +29,19 @@ func (a *API) monitorView(m *protocol.Monitor, agents map[string]*protocol.Agent
 	for _, st := range states {
 		byAgent[st.AgentID] = st
 	}
+	// A monitor with a node list shows exactly those nodes; one running on
+	// all online nodes shows whichever nodes have reported.
 	ids := map[string]bool{}
-	for id := range latest {
-		ids[id] = true
-	}
-	for id := range byAgent {
-		ids[id] = true
-	}
 	for _, id := range m.AgentIDs {
 		ids[id] = true
+	}
+	if len(ids) == 0 {
+		for id := range latest {
+			ids[id] = true
+		}
+		for id := range byAgent {
+			ids[id] = true
+		}
 	}
 	for id := range ids {
 		st := byAgent[id]
@@ -187,6 +191,9 @@ func (a *API) updateMonitor(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.UpsertMonitor(&m); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if err := a.store.PruneDeselectedStates(); err != nil {
+		a.log.Error("monitor: prune states", "id", m.ID, "err", err)
 	}
 	writeJSON(w, http.StatusOK, a.monitorView(&m, a.agentIndex()))
 }

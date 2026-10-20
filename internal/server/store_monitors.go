@@ -502,6 +502,17 @@ func (s *Store) ListStates(monitorID string) ([]*protocol.MonitorAgentState, err
 	return out, rows.Err()
 }
 
+// PruneDeselectedStates drops alert state of nodes a monitor no longer runs
+// on. Such a node never reports again, so its state could otherwise stay
+// alerting forever. Monitors without a node list ("all online nodes") keep
+// every state.
+func (s *Store) PruneDeselectedStates() error {
+	_, err := s.db.Exec(`DELETE FROM monitor_state WHERE EXISTS (
+		SELECT 1 FROM monitors m WHERE m.id=monitor_state.monitor_id AND m.agent_ids<>'[]'
+		AND monitor_state.agent_id NOT IN (SELECT value FROM json_each(m.agent_ids)))`)
+	return err
+}
+
 // AlertingCount returns how many (monitor, agent) pairs are currently alerting.
 func (s *Store) AlertingCount() (int, error) {
 	var n int

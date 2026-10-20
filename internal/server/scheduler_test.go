@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -376,5 +377,75 @@ func TestTaskDoneIgnoresDeletedAgent(t *testing.T) {
 	}
 	if latest, _ := st.LatestSamples("m"); len(latest) != 0 {
 		t.Fatalf("samples for a deleted node were recorded: %+v", latest)
+	}
+}
+
+// Taking nodes off a monitor drops them from its list view and clears their
+// alert state; a run already in flight on them is ignored.
+func TestDeselectedAgentsLeaveMonitor(t *testing.T) {
+	st, err := OpenStore(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, id := range []string{"keep", "drop"} {
+		if err := st.UpsertAgent(&protocol.AgentStatus{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &protocol.Monitor{ID: "m", Name: "m", Type: protocol.TaskPing, Target: "1.1.1.1", IntervalSec: 60, Enabled: true,
+		AgentIDs: []string{"keep", "drop"}, Alert: protocol.AlertRule{Enabled: true, Consecutive: 1}}
+	if err := st.UpsertMonitor(m); err != nil {
+		t.Fatal(err)
+	}
+	seedAlerting(t, st, "m", "keep")
+	seedAlerting(t, st, "m", "drop")
+
+	cfg := Config{AgentToken: "tok", TaskTimeout: time.Minute} // open mode: everyone is admin
+	hub := NewHub(cfg, st, nil, nil, discardLogger())
+	srv := httptest.NewServer(NewHandler(cfg, hub, st, emptyFS{}, mustSettings(t, st, cfg), nil, nil, discardLogger()))
+	defer srv.Close()
+
+	edited := *m
+	edited.AgentIDs = []string{"keep"}
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/monitors/m", bytes.NewReader(mustJSON(edited)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update: %d", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/api/monitors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Monitors []struct {
+			Agents   []protocol.MonitorAgentState `json:"agents"`
+			Alerting int                          `json:"alerting"`
+		} `json:"monitors"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if len(list.Monitors) != 1 {
+		t.Fatalf("monitors: %+v", list)
+	}
+	got := list.Monitors[0]
+	if len(got.Agents) != 1 || got.Agents[0].AgentID != "keep" || got.Alerting != 1 {
+		t.Fatalf("list view after deselecting: %+v", got)
+	}
+	if n, _ := st.AlertingCount(); n != 1 {
+		t.Fatalf("alerting count: %d, want 1", n)
+	}
+
+	s := NewScheduler(st, hub, NewNotifier(discardLogger()), func() string { return "" }, discardLogger())
+	s.onTaskDone(protocol.Task{ID: "t", MonitorID: "m"}, []*protocol.AgentResult{
+		{TaskID: "t", AgentID: "drop", Status: protocol.StatusError, Error: "timeout"},
+	})
+	if s, _ := st.GetState("m", "drop"); s.Failing != 0 || s.Alerting {
+		t.Fatalf("in-flight result for a deselected node was recorded: %+v", s)
 	}
 }
