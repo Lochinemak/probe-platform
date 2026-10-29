@@ -202,8 +202,9 @@ onBeforeUnmount(() => { clearInterval(agentTimer); if (unsubscribe) unsubscribe(
           <label class="field inline" style="margin-top:18px" v-if="props.role === 'admin'"><input type="checkbox" v-model="httpExtra.speed_test" /> 下载测速</label>
           <div class="field" v-if="httpExtra.speed_test"><label>测速时长 (s)</label><input type="number" min="1" max="60" v-model.number="httpExtra.speed_seconds" /></div>
           <div class="field" style="flex-basis:100%"></div>
-          <div class="field grow"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="httpExtra.headers" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>
-          <div class="field grow" v-if="!['GET', 'HEAD'].includes(params.http.method)"><label>请求体</label><textarea rows="2" v-model="httpExtra.body" spellcheck="false"></textarea></div>
+          <div class="field grow" v-if="props.role === 'admin'"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="httpExtra.headers" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>
+          <p class="sub" v-else style="margin:0">游客只能发起普通 GET / HEAD 请求，自定义 Header、请求体和忽略证书错误不生效；管理员登录后可用。</p>
+          <div class="field grow" v-if="props.role === 'admin' && !['GET', 'HEAD'].includes(params.http.method)"><label>请求体</label><textarea rows="2" v-model="httpExtra.body" spellcheck="false"></textarea></div>
         </template>
         <template v-else-if="type === 'dns'">
           <div class="field"><label>记录类型</label>

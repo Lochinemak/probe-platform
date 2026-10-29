@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,36 @@ func TestHTTPProbeLocal(t *testing.T) {
 	}
 	if res.Stats.Received != 2 {
 		t.Fatalf("stats: %+v", res.Stats)
+	}
+}
+
+func TestHTTPProbeCustomHeaders(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	got := make(chan *http.Request, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	p := protocol.Params{Count: 1, Headers: map[string]string{
+		"Referer":    "https://example.com/",
+		"user-agent": "Custom/1.0",
+		"Host":       "vhost.example",
+	}}
+	res, err := HTTP(context.Background(), "http://"+ln.Addr().String()+"/x", p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := res.Attempts[0]; !a.OK || a.StatusCode != 200 {
+		t.Fatalf("attempt: %+v", a)
+	}
+	r := <-got
+	if r.Referer() != "https://example.com/" || r.UserAgent() != "Custom/1.0" || r.Host != "vhost.example" {
+		t.Fatalf("headers not sent: referer=%q ua=%q host=%q", r.Referer(), r.UserAgent(), r.Host)
 	}
 }
 
