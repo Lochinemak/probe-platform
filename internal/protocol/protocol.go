@@ -353,6 +353,12 @@ type HTTPAttempt struct {
 	CertIssuer    string            `json:"cert_issuer,omitempty"`
 	CertNotAfter  *time.Time        `json:"cert_not_after,omitempty"`
 	Timing        HTTPTiming        `json:"timing"`
+	// FakeIP is set when the name resolved into 198.18.0.0/15 on the node
+	// (Clash / OpenClash fake-IP), i.e. the request went through the
+	// transparent proxy. The attempt is still a real end-to-end result for
+	// "does this site work from here", but the timings describe the proxy
+	// path rather than the node's own network.
+	FakeIP bool `json:"fake_ip,omitempty"`
 	// Assertions are the configured checks (status / keyword / max time);
 	// AssertOK is false when any of them failed.
 	Assertions []Assertion `json:"assertions,omitempty"`

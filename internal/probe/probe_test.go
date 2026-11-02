@@ -253,11 +253,57 @@ func TestHTTPProbeLocal(t *testing.T) {
 	if a.Timing.TotalMs <= 0 || a.Timing.ConnectMs < 0 || a.Timing.TTFBMs < 0 {
 		t.Fatalf("timing: %+v", a.Timing)
 	}
-	if a.IP != "127.0.0.1" {
-		t.Fatalf("ip: %q", a.IP)
+	if a.IP != "127.0.0.1" || a.FakeIP {
+		t.Fatalf("ip: %q fake=%v", a.IP, a.FakeIP)
 	}
 	if res.Stats.Received != 2 {
 		t.Fatalf("stats: %+v", res.Stats)
+	}
+}
+
+// withFakeIPResolver points the process resolver at a loopback DNS server that
+// answers every A query with a fake-IP, the way a node behind OpenClash sees
+// the world. Restored when the test ends.
+func withFakeIPResolver(t *testing.T) {
+	t.Helper()
+	server := fakeDNS(t, [4]byte{198, 18, 3, 6}, 1)
+	orig := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", server)
+		},
+	}
+	t.Cleanup(func() { net.DefaultResolver = orig })
+}
+
+// An HTTP probe behind a fake-IP DNS still runs (the request goes through the
+// transparent proxy and says whether the site works from there) and flags the
+// attempt, while tcping keeps refusing such a target.
+func TestHTTPProbeFakeIPRunsAndFlags(t *testing.T) {
+	withFakeIPResolver(t)
+	p := protocol.Params{Count: 1, TimeoutMs: 300}
+	res, err := HTTP(context.Background(), "http://fakeip.test:9/", p, nil)
+	if err != nil {
+		t.Fatalf("http behind fake-IP must not be refused: %v", err)
+	}
+	if len(res.Attempts) != 1 {
+		t.Fatalf("attempts: %+v", res.Attempts)
+	}
+	if a := res.Attempts[0]; !a.FakeIP {
+		t.Fatalf("attempt must be flagged fake-IP: %+v", a)
+	}
+
+	// Guests cannot be allowed through the proxy (public-only is unenforceable
+	// there); they get the explanatory error instead of a private-target one.
+	p.PublicOnly = true
+	if _, err := HTTP(context.Background(), "http://fakeip.test:9/", p, nil); err == nil || !strings.Contains(err.Error(), "fake-IP") {
+		t.Fatalf("guest http behind fake-IP: %v", err)
+	}
+
+	if _, err := TCPing(context.Background(), "fakeip.test:9", protocol.Params{Count: 1, TimeoutMs: 300}, nil); err == nil || !strings.Contains(err.Error(), "fake-IP") {
+		t.Fatalf("tcping behind fake-IP must still be refused: %v", err)
 	}
 }
 

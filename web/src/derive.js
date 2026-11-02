@@ -52,6 +52,9 @@ export function derive(task, r) {
       out.throughput = speeds.length ? speeds.reduce((s, v) => s + v, 0) / speeds.length : undefined
       out.avg = {}
       for (const k of phases) out.avg[k] = okA.length ? okA.reduce((s, a) => s + (a.timing?.[k] || 0), 0) / okA.length : undefined
+      // The node's DNS is hijacked by a fake-IP proxy: the request went through
+      // it, so the result is real but the timings are of the proxy path.
+      out.fakeIP = attempts.some((a) => a.fake_ip)
       break
     }
     case 'dns': {

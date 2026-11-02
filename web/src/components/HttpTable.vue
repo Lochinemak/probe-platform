@@ -5,6 +5,9 @@ import ErrorBadge from './ErrorBadge.vue'
 
 defineProps({ task: Object, results: Array })
 const open = ref({})
+// 198.18.0.0/15: the node's DNS answers come from a transparent proxy's
+// fake-IP pool, so the request was relayed by the proxy.
+const FAKE_IP_HINT = '198.18.x.x 为透明代理（OpenClash 等）fake-IP：请求经代理转发，状态码与断言仍有效，但各阶段耗时反映的是代理链路而非本机网络'
 function toggle(id) { open.value[id] = !open.value[id] }
 function codeClass(c) { return c ? 'code-' + Math.floor(c / 100) : '' }
 function phaseWidths(t) {
@@ -44,7 +47,7 @@ function phaseWidths(t) {
             <td class="sub">{{ open[r.agent_id] ? '▾' : '▸' }}</td>
             <td><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
             <td class="sub">{{ agentPlace(r) || '-' }}</td>
-            <td class="mono">{{ r.last?.ip || '-' }}</td>
+            <td class="mono">{{ r.last?.ip || '-' }}<span v-if="r.fakeIP" class="badge warn" style="margin-left:6px" :title="FAKE_IP_HINT">fake-IP</span></td>
             <td>
               <span v-if="r.last?.status_code" class="badge" :class="codeClass(r.last.status_code)">{{ r.last.status_code }}</span>
               <span v-else class="sub">-</span>
@@ -93,7 +96,7 @@ function phaseWidths(t) {
                   <span><b>总计 {{ ms(a.timing.total_ms) }} ms</b></span>
                 </div>
                 <div class="kv" style="margin-top:8px" v-if="a.ok">
-                  <div>IP</div><div class="mono">{{ a.ip }}</div>
+                  <div>IP</div><div class="mono">{{ a.ip }}<span v-if="a.fake_ip" class="sub" style="margin-left:8px">{{ FAKE_IP_HINT }}</span></div>
                   <div>协议</div><div>{{ a.proto }}</div>
                   <template v-if="a.tls_version">
                     <div>TLS</div><div>{{ a.tls_version }} · {{ a.tls_cipher }}</div>

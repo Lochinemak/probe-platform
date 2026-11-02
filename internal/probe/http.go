@@ -50,10 +50,19 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
-	// Resolve up front purely to reject fake-IP answers; the HTTP client does
-	// its own lookup for the request itself.
-	if _, err := Resolve(ctx, u.Hostname(), p.IPVersion, p.PublicOnly); err != nil {
-		return nil, err
+	// Unlike ping / tcping / mtr, a fake-IP answer does not abort an HTTP
+	// probe: the request still reaches the real site through the transparent
+	// proxy, so status code, TLS certificate and assertions remain a genuine
+	// "does it work from this household" result. doHTTP flags such attempts
+	// (HTTPAttempt.FakeIP) so the dashboard can say the timings are of the
+	// proxy path. Guests are the exception: through the proxy the node would
+	// connect to whatever the router resolves the name to, so the public-only
+	// policy cannot be enforced and the task is refused up front with the
+	// explanatory error.
+	if p.PublicOnly {
+		if _, err := Resolve(ctx, u.Hostname(), p.IPVersion, true); err != nil {
+			return nil, err
+		}
 	}
 
 	res := &protocol.HTTPResult{URL: u.String()}
@@ -87,6 +96,7 @@ type phaseClock struct {
 	tlsStart, tlsDone   time.Time
 	wroteReq, firstByte time.Time
 	ip                  string
+	fakeIP              bool // a DNS answer or the connected address was in 198.18.0.0/15
 	tlsState            *tls.ConnectionState
 }
 
@@ -98,7 +108,24 @@ func (c *phaseClock) reset() {
 	c.tlsStart, c.tlsDone = time.Time{}, time.Time{}
 	c.wroteReq, c.firstByte = time.Time{}, time.Time{}
 	c.ip = ""
+	c.fakeIP = false
 	c.tlsState = nil
+}
+
+// markFakeIP records whether any of the addresses the resolver returned, or
+// the address the connection ended up on, is a fake-IP. Both are checked
+// because a failed connect leaves ip empty while the DNS answer is still
+// known, and a cached or literal address skips the DNS phase entirely.
+func (c *phaseClock) markFakeIP(addrs []net.IPAddr, ip string) {
+	for _, a := range addrs {
+		if IsFakeIP(a.IP) {
+			c.fakeIP = true
+			return
+		}
+	}
+	if IsFakeIP(net.ParseIP(ip)) {
+		c.fakeIP = true
+	}
 }
 
 func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeout time.Duration) protocol.HTTPAttempt {
@@ -114,9 +141,10 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 			clock.dnsStart = time.Now()
 			clock.mu.Unlock()
 		},
-		DNSDone: func(httptrace.DNSDoneInfo) {
+		DNSDone: func(info httptrace.DNSDoneInfo) {
 			clock.mu.Lock()
 			clock.dnsDone = time.Now()
+			clock.markFakeIP(info.Addrs, "")
 			clock.mu.Unlock()
 		},
 		ConnectStart: func(_, _ string) {
@@ -132,6 +160,7 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 				clock.connDone = time.Now()
 				if h, _, e := net.SplitHostPort(addr); e == nil {
 					clock.ip = h
+					clock.markFakeIP(nil, h)
 				}
 			}
 			clock.mu.Unlock()
@@ -235,6 +264,7 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 		a.Timing.TotalMs = ms(time.Since(clock.start))
 		clock.mu.Lock()
 		a.IP = clock.ip
+		a.FakeIP = clock.fakeIP
 		clock.mu.Unlock()
 		return a
 	}
@@ -277,6 +307,7 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 	a.ContentLength = resp.ContentLength
 	a.BodyBytes = n
 	a.IP = clock.ip
+	a.FakeIP = clock.fakeIP
 	a.FinalURL = resp.Request.URL.String()
 	if readErr != nil {
 		a.Error = "body: " + ErrString(readErr)
