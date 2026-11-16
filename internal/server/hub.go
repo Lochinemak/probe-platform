@@ -27,6 +27,8 @@ const (
 	agentPingInterval = 30 * time.Second
 	finishedTaskTTL   = 10 * time.Minute
 	maxProgressEvents = 1000
+	// maxTaskDeadline bounds taskDeadline whatever the parameters say.
+	maxTaskDeadline = 30 * time.Minute
 )
 
 // Hub tracks connected agents and in-flight tasks.
@@ -562,6 +564,9 @@ type taskRun struct {
 	done    bool
 	doneAt  time.Time
 	timer   *time.Timer
+	// stopping is set by StopTask: the agents were told to stop and their
+	// partial results are still welcome.
+	stopping bool
 }
 
 func (tr *taskRun) snapshotLocked() protocol.Event {
@@ -725,7 +730,7 @@ func (h *Hub) createTask(typ protocol.TaskType, target string, params protocol.P
 		tr.done = true
 		tr.doneAt = time.Now()
 	} else {
-		tr.timer = time.AfterFunc(h.cfg.TaskTimeout, func() { h.expireTask(tr) })
+		tr.timer = time.AfterFunc(taskDeadline(h.cfg.TaskTimeout, typ, params), func() { h.expireTask(tr) })
 	}
 	snap := tr.snapshotLocked()
 	tr.mu.Unlock()
@@ -804,11 +809,16 @@ func (h *Hub) handleResult(ac *agentConn, r protocol.Result) {
 	}
 	res.Data = r.Data
 	res.DurationMs = r.DurationMs
-	status := protocol.StatusDone
+	status, errMsg := protocol.StatusDone, r.Error
 	if !r.OK {
 		status = protocol.StatusError
+		// The user pressed stop and the agent handed back what it had measured
+		// so far: that is a result, not a failure.
+		if tr.stopping && r.Error == "cancelled" && len(r.Data) > 0 && string(r.Data) != "null" {
+			status, errMsg = protocol.StatusDone, protocol.ErrStopped
+		}
 	}
-	changed, finished := tr.finishResultLocked(res, status, r.Error)
+	changed, finished := tr.finishResultLocked(res, status, errMsg)
 	copyRes := *res
 	tr.mu.Unlock()
 	if changed {
@@ -879,6 +889,92 @@ func (h *Hub) CancelTask(id string) bool {
 	}
 	h.failAll(tr, "cancelled")
 	return true
+}
+
+// stopGrace is how long StopTask waits for the agents' partial results before
+// it gives up on the stragglers.
+var stopGrace = 5 * time.Second
+
+// StopTask asks the agents to stop and keeps what they measured so far: each
+// agent answers a cancel with its partial data, which is stored as a finished
+// result marked protocol.ErrStopped. Agents that do not answer within
+// stopGrace are failed as cancelled. Returns false if the task is unknown.
+func (h *Hub) StopTask(id string) bool {
+	tr := h.getTask(id)
+	if tr == nil {
+		return false
+	}
+	cancelMsg, _ := protocol.NewMessage(protocol.MsgCancel, map[string]string{"task_id": tr.task.ID})
+	tr.mu.Lock()
+	if tr.done || tr.stopping {
+		tr.mu.Unlock()
+		return true
+	}
+	tr.stopping = true
+	for _, ac := range tr.conns {
+		ac.trySend(cancelMsg)
+	}
+	if tr.timer != nil {
+		tr.timer.Stop()
+	}
+	tr.timer = time.AfterFunc(stopGrace, func() { h.failAll(tr, "cancelled") })
+	tr.mu.Unlock()
+	return true
+}
+
+// HasRunningContinuous reports whether owner already has a continuous run in
+// flight.
+func (h *Hub) HasRunningContinuous(owner string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, tr := range h.tasks {
+		if tr.task.Owner != owner || !tr.task.Params.Continuous {
+			continue
+		}
+		tr.mu.Lock()
+		done := tr.done
+		tr.mu.Unlock()
+		if !done {
+			return true
+		}
+	}
+	return false
+}
+
+// taskDeadline is how long a task may run before the hub gives up on it:
+// base (PROBE_TASK_TIMEOUT) for most, longer when the parameters themselves
+// ask for a longer run, as a continuous ping does.
+func taskDeadline(base time.Duration, typ protocol.TaskType, p protocol.Params) time.Duration {
+	if typ != protocol.TaskPing && typ != protocol.TaskTCPing {
+		return base
+	}
+	count, interval, timeout := p.Count, p.IntervalMs, p.TimeoutMs
+	if count <= 0 {
+		count = 10
+	}
+	if count > 100 {
+		count = 100 // the agents' own cap
+	}
+	if interval <= 0 {
+		interval = 1000
+	}
+	if timeout <= 0 {
+		timeout = 3000
+	}
+	// ping sends on a fixed cadence; a tcping attempt that times out pushes
+	// the next one back by its whole timeout.
+	need := time.Duration(count*interval+timeout) * time.Millisecond
+	if typ == protocol.TaskTCPing {
+		need = time.Duration(count*(interval+timeout)) * time.Millisecond
+	}
+	need += 20 * time.Second // resolve, queueing behind other tasks, the result's trip back
+	if need > maxTaskDeadline {
+		need = maxTaskDeadline
+	}
+	if need < base {
+		return base
+	}
+	return need
 }
 
 // Subscribe returns the current snapshot plus a channel of subsequent events.

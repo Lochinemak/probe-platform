@@ -59,7 +59,7 @@ const count = computed(() => props.task.params?.count || 10)
           <td>
             <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
             <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
-            <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
+            <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
           </td>
         </tr>
       </tbody>

@@ -61,6 +61,7 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("GET /api/tasks/{id}", a.protectGuest(a.getTask))
 	mux.Handle("GET /api/tasks/{id}/events", a.protectGuest(a.taskEvents))
 	mux.Handle("POST /api/tasks/{id}/cancel", a.protectGuest(a.cancelTask))
+	mux.Handle("POST /api/tasks/{id}/stop", a.protectGuest(a.stopTask))
 	mux.Handle("GET /api/monitors", a.protect(a.listMonitors))
 	mux.Handle("POST /api/monitors", a.protect(a.createMonitor))
 	mux.Handle("GET /api/monitors/{id}", a.protect(a.getMonitor))
@@ -219,14 +220,39 @@ func guestParams(typ protocol.TaskType, p protocol.Params) protocol.Params {
 			p.Count = 5
 		}
 	default:
-		if p.Count > 20 {
+		if p.Count > 20 && !p.Continuous {
 			p.Count = 20
 		}
 	}
 	if p.IntervalMs > 0 && p.IntervalMs < 200 {
 		p.IntervalMs = 200
 	}
+	if p.Continuous {
+		// A continuous run holds a slot on every node for its whole length, so
+		// a guest gets at most guestContinuousCount samples spread over at
+		// most guestContinuousWindow.
+		if p.IntervalMs <= 0 {
+			p.IntervalMs = 1000
+		}
+		if p.Count <= 0 || p.Count > guestContinuousCount {
+			p.Count = guestContinuousCount
+		}
+		if most := int(guestContinuousWindow/time.Millisecond) / p.IntervalMs; p.Count > most {
+			p.Count = max(most, 1)
+		}
+	}
 	return p
+}
+
+// Limits on a guest's continuous ping / tcping run.
+const (
+	guestContinuousCount  = 60
+	guestContinuousWindow = 60 * time.Second
+)
+
+// continuousType reports whether typ has a continuous mode.
+func continuousType(typ protocol.TaskType) bool {
+	return typ == protocol.TaskPing || typ == protocol.TaskTCPing
 }
 
 // publicAgent trims an agent record to what a guest may see.
@@ -622,7 +648,7 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !req.Type.Valid() {
-		writeErr(w, http.StatusBadRequest, "type must be one of ping, tcping, http, mtr")
+		writeErr(w, http.StatusBadRequest, "type must be one of ping, tcping, http, mtr, dns")
 		return
 	}
 	if strings.TrimSpace(req.Target) == "" {
@@ -633,8 +659,15 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "too many agents")
 		return
 	}
+	if !continuousType(req.Type) {
+		req.Params.Continuous = false
+	}
 	owner := a.auth.owner(r)
 	if a.auth.role(r) == roleGuest {
+		if req.Params.Continuous && owner != "" && a.hub.HasRunningContinuous(owner) {
+			writeErr(w, http.StatusTooManyRequests, "游客同时只能运行一个持续检测，请等上一个结束或先停止它")
+			return
+		}
 		if !guestLimiter.allowAttempt(a.cfg.ClientIP(r)) {
 			writeErr(w, http.StatusTooManyRequests, "游客每分钟最多发起 10 次拨测，请稍后再试或登录")
 			return
@@ -713,6 +746,21 @@ func (a *API) cancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.hub.CancelTask(id) {
+		writeErr(w, http.StatusNotFound, "task not running")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// stopTask ends a running task early but keeps what the agents measured so
+// far, unlike cancelTask which discards it.
+func (a *API) stopTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if snap, err := a.hub.LoadTask(id); err != nil || !a.canSeeTask(r, snap.Task) {
+		writeErr(w, http.StatusNotFound, "task not running")
+		return
+	}
+	if !a.hub.StopTask(id) {
 		writeErr(w, http.StatusNotFound, "task not running")
 		return
 	}

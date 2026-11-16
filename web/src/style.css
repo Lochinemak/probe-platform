@@ -29,7 +29,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .topbar { display: flex; align-items: center; gap: 24px; height: 56px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: .5px; }
 .brand .dot { width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #fff 0 28%, var(--accent) 30%); box-shadow: 0 0 12px var(--accent); }
-.nav { display: flex; gap: 4px; }
+.nav { display: flex; gap: 4px; align-items: center; }
+.nav-menu { position: relative; }
+.nav-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 120px; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 34px rgba(0,0,0,.35); }
+.nav-pop button { text-align: left; }
 .nav button { background: transparent; border: 0; padding: 8px 14px; border-radius: 8px; color: var(--muted); cursor: pointer; }
 .nav button:hover { color: var(--text); background: var(--bg-3); }
 .nav button.active { color: var(--text); background: var(--bg-3); font-weight: 600; }
@@ -42,6 +45,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .tabs { display: inline-flex; background: var(--bg-3); border-radius: 10px; padding: 4px; gap: 2px; }
 .tabs button { border: 0; background: transparent; padding: 7px 18px; border-radius: 8px; cursor: pointer; color: var(--muted); font-weight: 600; letter-spacing: .5px; }
 .tabs button.active { background: var(--accent); color: #fff; }
+.tabs.types { display: flex; flex-wrap: wrap; }
+.tabs.types button { padding: 7px 14px; letter-spacing: 0; white-space: nowrap; }
+.tabs.sm { padding: 3px; border-radius: 8px; flex: none; }
+.tabs.sm button { padding: 4px 12px; font-size: 12.5px; font-weight: 500; letter-spacing: 0; border-radius: 6px; white-space: nowrap; }
 
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .row.top { align-items: flex-start; }
@@ -63,6 +70,30 @@ input[type="number"] { width: 90px; }
 .btn.danger { color: var(--bad); }
 .btn.sm { padding: 4px 10px; font-size: 12px; }
 .btn.link { background: transparent; border-color: transparent; color: var(--accent-2); padding: 2px 6px; }
+.btn.outline { background: transparent; border-color: var(--accent); color: var(--accent-2); font-weight: 600; padding: 11px 20px; font-size: 15px; }
+.btn.outline:hover { background: rgba(14,165,233,.12); }
+.btn.stop { background: transparent; border-color: var(--bad); color: var(--bad); font-weight: 600; padding: 11px 22px; font-size: 15px; }
+.btn.stop:disabled { opacity: .6; cursor: default; }
+
+/* Probe form: the target box with its recent-targets dropdown, and the action buttons. */
+.probe-main { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
+.probe-actions { display: flex; gap: 8px; }
+.probe-opts { margin-top: 10px; row-gap: 8px; }
+.port-input { width: 96px !important; font-family: var(--mono); font-size: 15px; }
+.target-box { position: relative; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px 0 8px; }
+.target-box:focus-within { border-color: var(--accent); }
+.target-box.invalid { border-color: var(--bad); }
+.target-box .target-input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 11px 6px; }
+.recent-list { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 50; max-height: 320px; overflow: auto; padding: 4px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 34px rgba(0,0,0,.35); }
+.recent-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; font-size: 12px; color: var(--muted); }
+.recent-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.recent-item .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-item.active { background: var(--bg-3); }
+.recent-del { visibility: hidden; flex: none; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 6px; font-size: 16px; line-height: 1; }
+.recent-item.active .recent-del { visibility: visible; }
+.recent-del:hover { color: var(--bad); }
+.field-error { color: var(--bad); font-size: 12.5px; margin-top: 6px; }
+.notice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); font-size: 13px; }
 
 .agents-pick { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; user-select: none; font-size: 13px; }
@@ -87,7 +118,7 @@ table.grid tr.clickable { cursor: pointer; }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: var(--bg-3); color: var(--muted); letter-spacing: .3px; }
-.badge.ping { color: #7dd3fc; } .badge.tcping { color: #c4b5fd; } .badge.http { color: #86efac; } .badge.mtr { color: #fdba74; }
+.badge.ping { color: #7dd3fc; } .badge.tcping { color: #c4b5fd; } .badge.http { color: #86efac; } .badge.mtr { color: #fdba74; } .badge.dns { color: #f9a8d4; }
 .badge.running { color: var(--accent-2); } .badge.done { color: var(--ok); } .badge.error { color: var(--bad); }
 .badge.code-2 { color: var(--ok); } .badge.code-3 { color: var(--accent-2); } .badge.code-4 { color: var(--warn); } .badge.code-5 { color: var(--bad); }
 
@@ -126,8 +157,10 @@ table.grid tr.clickable { cursor: pointer; }
 pre.cmd { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; margin: 6px 0; }
 details summary { cursor: pointer; color: var(--muted); }
 @media (max-width: 800px) {
-  .topbar { height: auto; flex-wrap: wrap; padding: 10px 0; }
+  .topbar { height: auto; flex-wrap: wrap; padding: 10px 0; gap: 10px 16px; }
   .app { padding: 0 10px 30px; }
+  .probe-actions { flex: 1 1 100%; }
+  .probe-actions .btn { flex: 1; }
 }
 
 .badge.clickable { cursor: pointer; }

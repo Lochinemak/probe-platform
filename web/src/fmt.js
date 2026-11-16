@@ -75,7 +75,13 @@ export function errorLabel(msg) {
   return '失败'
 }
 
+// statusLabel takes a status or a whole result; a result that finished
+// because the user stopped the task (it keeps its partial data) says so.
 export function statusLabel(s) {
+  if (s && typeof s === 'object') {
+    if (s.status === 'done' && s.error === 'stopped') return '已停止'
+    s = s.status
+  }
   return { pending: '等待', running: '进行中', done: '完成', error: '失败' }[s] || s
 }
 

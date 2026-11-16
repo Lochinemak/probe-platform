@@ -4,8 +4,8 @@
 
 | 类型 | 内容 |
 | --- | --- |
-| **ICMP Ping** | 延迟 / 丢包 / 抖动，逐包实时回传 |
-| **TCPing** | TCP 握手延迟、端口连通性 |
+| **ICMP Ping** | 延迟 / 丢包 / 抖动，逐包实时回传；单次检测，或「持续检测」连续采样（默认 100 次 · 1000 ms） |
+| **TCPing** | TCP 握手延迟、端口连通性；同样支持持续检测 |
 | **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
 | **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
 | **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
@@ -211,6 +211,18 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 - **发布**：打 `v*` 标签会额外产出各架构的二进制到 GitHub Releases。
 - 需要的仓库 secrets：`DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_SSH_KEY`。
 
+## 页面地址
+
+页面状态都在地址里，刷新、收藏、前进后退都会回到同一处：
+
+| 地址 | 页面 |
+| --- | --- |
+| `/ping` `/tcping` `/http` `/dns` `/mtr` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
+| `/t/<任务 ID>` | 某一次检测的结果：进行中的实时更新，结束的从历史读取，表单同时回填成当时的参数。游客只能打开自己发起的 |
+| `/monitors` `/agents` `/history` `/notify` `/settings` | 监控、节点、历史、通知、设置（「历史」里的每一行都链接到 `/t/<任务 ID>`） |
+
+目标输入框会按检测类型记住最近用过的目标（只存在浏览器本地）：聚焦展开，↑ / ↓ 选择，回车填入，Delete 删除选中的一条，Alt+Delete 清空当前类型。
+
 ## 配置
 
 server（flag 或环境变量）：
@@ -227,7 +239,7 @@ server（flag 或环境变量）：
 | `PROBE_PROXY_HOPS` | `1` | 前面有几层反向代理。只有这些代理追加到 `X-Forwarded-For` 的条目才可信，客户端自带的部分一律忽略 |
 | `PROBE_GEOIP_ONLINE` | `true` | 离线库查不到时才调用 ip-api.com（免费接口只有 HTTP，见「安全说明」） |
 | `PROBE_IP2REGION_DB` | `<data>/ip2region.xdb` | 离线 IP 库路径 |
-| `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒） |
+| `PROBE_TASK_TIMEOUT` | `180` | 任务整体超时（秒）。ping / tcping 的次数 × 间隔超过它时（比如间隔很大的持续检测）按参数自动延长，上限 30 分钟 |
 | `PROBE_RETAIN_DAYS` | `90` | 历史保留天数，0 为永久 |
 | `PROBE_BASE_URL` | 空 | 引导值：站点公网地址，用于告警链接和 Logto 回调（「设置 → 常规」可改） |
 | `PROBE_MONITOR_TASK_RETAIN_HOURS` | `48` | 定时监控每次运行的完整结果保留时长（小时） |
@@ -238,7 +250,7 @@ agent：`PROBE_SERVER`、`PROBE_TOKEN`（本节点的 token，决定节点身份
 
 ## API
 
-所有接口返回 JSON；管理员接口需先 `POST /api/login {"username": "admin", "password": "..."}` 获取 Cookie。游客可直接调用拨测相关接口，但 `GET /api/tasks`、`GET /api/tasks/{id}`（及 `/events`、`/cancel`）只对自己发起的任务有效：第一次 `POST /api/tasks` 会下发一枚 `probe_guest` Cookie，之后带着它请求才能看到这些记录。
+所有接口返回 JSON；管理员接口需先 `POST /api/login {"username": "admin", "password": "..."}` 获取 Cookie。游客可直接调用拨测相关接口，但 `GET /api/tasks`、`GET /api/tasks/{id}`（及 `/events`、`/stop`、`/cancel`）只对自己发起的任务有效：第一次 `POST /api/tasks` 会下发一枚 `probe_guest` Cookie，之后带着它请求才能看到这些记录。
 
 ```bash
 # 对所有在线节点做 tcping
@@ -251,8 +263,13 @@ curl -s -X POST localhost:8080/api/tasks -d '{"type":"dns","target":"www.qq.com"
 # 定时监控与通知渠道
 curl -s localhost:8080/api/monitors; curl -s localhost:8080/api/notify; curl -s localhost:8080/api/alerts
 curl -s "localhost:8080/api/monitors/<id>/series?range=24h'
+# 持续检测（ping / tcping）：次数和间隔照常给，continuous 标记这是一次长采样
+curl -s -X POST localhost:8080/api/tasks -d '{"type":"ping","target":"223.5.5.5","params":{"count":100,"interval_ms":1000,"continuous":true}}'
 # 实时结果（SSE：snapshot → progress* → result* → done）
 curl -N localhost:8080/api/tasks/<id>/events
+# 提前结束：stop 保留各节点已经测到的数据（结果状态为 done、error 为 "stopped"）；cancel 直接丢弃
+curl -s -X POST localhost:8080/api/tasks/<id>/stop
+curl -s -X POST localhost:8080/api/tasks/<id>/cancel
 # 历史
 curl localhost:8080/api/tasks?limit=20
 curl localhost:8080/api/tasks/<id>
@@ -318,7 +335,7 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 登录相关的配置都在 Dashboard 的「设置」页（管理员可见）修改，保存后立即生效、无需重启；环境变量只作为首次启动的引导值，页面里保存过的项以数据库为准。
 
 - **未配置任何登录方式**（既没有密码也没有 Logto）：开放模式，所有人都是管理员，只适合内网。首次部署请用 `PROBE_ADMIN_PASSWORD` 提供一个引导密码，登录后在「设置 → 管理员密码」里改成自己的（保存为 bcrypt 哈希，之后环境变量里的密码就不再起作用，可以删掉）。
-- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：**目标必须是公网地址**（内网、回环、CGNAT、云元数据 169.254.169.254 等一律拒绝，域名解析到这些地址也拒绝）；HTTP 只能 GET / HEAD，不能自定义请求头和请求体，不能关闭证书校验；DNS 指定的服务器必须是公网地址且只能用 53 端口（DoH 必须 https）；每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速。管理员不受这些限制，仍可探测自己的内网。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：**目标必须是公网地址**（内网、回环、CGNAT、云元数据 169.254.169.254 等一律拒绝，域名解析到这些地址也拒绝）；HTTP 只能 GET / HEAD，不能自定义请求头和请求体，不能关闭证书校验；DNS 指定的服务器必须是公网地址且只能用 53 端口（DoH 必须 https）；每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速；持续检测最多 60 次、总时长不超过 60 秒，且同一游客同时只能运行一个。管理员不受这些限制，仍可探测自己的内网。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
 - **管理员**：右上角「管理员登录」。登录后「历史」页显示所有人的记录，并多一列「来源」（管理员用户名 / 游客 + 短 ID / 定时监控）。两种方式：
   - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
   - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和管理员名单（逗号分隔的邮箱 / 用户名 / sub；**留空则拒绝所有 Logto 登录**——Logto 租户通常允许自助注册，把空名单当成「所有人都是管理员」等于把后台交给任何愿意注册的人），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。

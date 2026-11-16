@@ -2,13 +2,12 @@
 import { ref, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import { typeLabel, fmtTime, timeAgo } from '../fmt.js'
-import TaskResults from '../components/TaskResults.vue'
+import { navigate, taskPath } from '../route.js'
 
-const props = defineProps({ initialId: String, admin: Boolean })
+const props = defineProps({ admin: Boolean })
 const tasks = ref([])
 const error = ref('')
 const loading = ref(false)
-const current = ref(null) // snapshot { task, results }
 const page = ref(0)
 const pageSize = 50
 const showMonitors = ref(false)
@@ -17,9 +16,12 @@ async function load() {
   loading.value = true
   try { tasks.value = (await api.tasks(pageSize, page.value * pageSize, showMonitors.value ? '*' : '')).tasks } catch (e) { if (e.status !== 401) error.value = e.message } finally { loading.value = false }
 }
-async function open(id) {
-  error.value = ''
-  try { current.value = await api.task(id) } catch (e) { error.value = e.message }
+// A task opens on the probe page under its own link (/t/<id>); a modified
+// click on the link itself opens a new tab as usual.
+function open(e, id) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return
+  e.preventDefault()
+  navigate(taskPath(id))
 }
 function paramSummary(p) {
   return Object.entries(p || {}).filter(([, v]) => v !== '' && v !== false && v !== 0).map(([k, v]) => `${k}=${v}`).join(' ')
@@ -34,23 +36,15 @@ function ownerLabel(t) {
   if (o.startsWith('guest:')) return `游客 ${o.slice(6, 14)}`
   return '—'
 }
-watch(() => props.initialId, (id) => { if (id) open(id) })
 // Logging in or out changes what the server lets us see.
-watch(() => props.admin, () => { page.value = 0; current.value = null; load() })
-onMounted(() => { load(); if (props.initialId) open(props.initialId) })
+watch(() => props.admin, () => { page.value = 0; load() })
+onMounted(load)
 </script>
 
 <template>
   <div>
     <div class="error-box" v-if="error">{{ error }}</div>
-    <div class="card" v-if="current">
-      <div class="row" style="margin-bottom:10px">
-        <button class="btn sm" @click="current = null">← 返回列表</button>
-        <span class="sub mono">{{ current.task.id }}</span>
-      </div>
-      <TaskResults :task="current.task" :results="current.results || []" :running="false" />
-    </div>
-    <div class="card" v-else>
+    <div class="card">
       <div class="row" style="margin-bottom:10px">
         <h3 style="margin:0">历史记录</h3>
         <span class="spacer"></span>
@@ -65,9 +59,9 @@ onMounted(() => { load(); if (props.initialId) open(props.initialId) })
         <table class="grid">
           <thead><tr><th>类型</th><th>目标</th><th class="num">节点数</th><th>参数</th><th v-if="admin">来源</th><th>时间</th></tr></thead>
           <tbody>
-            <tr v-for="t in tasks" :key="t.id" class="clickable" @click="open(t.id)">
+            <tr v-for="t in tasks" :key="t.id" class="clickable" @click="open($event, t.id)">
               <td><span class="badge" :class="t.type">{{ typeLabel[t.type] }}</span></td>
-              <td class="mono">{{ t.target }}</td>
+              <td class="mono"><a :href="taskPath(t.id)" @click.stop="open($event, t.id)">{{ t.target }}</a></td>
               <td class="num">{{ t.agent_ids?.length || 0 }}</td>
               <td class="sub mono">{{ paramSummary(t.params) }}</td>
               <td class="sub" v-if="admin" :title="t.owner || ''">{{ ownerLabel(t) }}</td>

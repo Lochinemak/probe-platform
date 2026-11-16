@@ -30,6 +30,7 @@ export const api = {
   task: (id) => request('GET', `/api/tasks/${encodeURIComponent(id)}`),
   createTask: (body) => request('POST', '/api/tasks', body),
   cancelTask: (id) => request('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
+  stopTask: (id) => request('POST', `/api/tasks/${encodeURIComponent(id)}/stop`),
   agentFiles: () => request('GET', '/api/agent/version'),
   monitors: () => request('GET', '/api/monitors'),
   monitor: (id) => request('GET', `/api/monitors/${encodeURIComponent(id)}`),

@@ -1,0 +1,23 @@
+import { describe, it, expect } from 'vitest'
+import { parse, taskPath } from '../route.js'
+
+describe('parse', () => {
+  it('maps probe type paths', () => {
+    expect(parse('/ping')).toMatchObject({ page: 'probe', type: 'ping', taskId: '' })
+    expect(parse('/tcping/')).toMatchObject({ page: 'probe', type: 'tcping' })
+    expect(parse('/http', '?target=example.com')).toMatchObject({ page: 'probe', type: 'http', query: { target: 'example.com' } })
+  })
+  it('maps task links', () => {
+    expect(parse('/t/mabc123')).toMatchObject({ page: 'probe', type: '', taskId: 'mabc123' })
+    expect(parse(taskPath('a b'))).toMatchObject({ taskId: 'a b' })
+  })
+  it('maps the other pages', () => {
+    for (const p of ['monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
+    expect(parse('/monitors', '?id=m1').query.id).toBe('m1')
+  })
+  it('falls back to the probe page', () => {
+    for (const p of ['/', '', '/nope', '/t', '/t/a/b', '/ping/extra', '/history/x']) {
+      expect(parse(p)).toMatchObject({ page: 'probe', type: '', taskId: '' })
+    }
+  })
+})

@@ -45,7 +45,7 @@ defineProps({ task: Object, results: Array })
             <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
             <ErrorBadge v-else-if="r.status === 'error' || (r.last && !r.last.ok && r.last.error)" :message="r.error || r.last?.error || '失败'" />
             <span v-else-if="r.last && !r.last.ok" class="badge warn">{{ r.last.rcode }}</span>
-            <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
+            <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
           </td>
         </tr>
       </tbody>

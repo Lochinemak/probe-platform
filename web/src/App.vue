@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api } from './api.js'
+import { route, navigate, taskPath } from './route.js'
 import ProbeView from './views/Probe.vue'
 import AgentsView from './views/Agents.vue'
 import HistoryView from './views/History.vue'
@@ -8,35 +9,31 @@ import MonitorsView from './views/Monitors.vue'
 import NotifyView from './views/Notify.vue'
 import SettingsView from './views/Settings.vue'
 
-// Tabs in display order. The active tab lives in the URL path (/history,
-// /settings, …) so a reload, bookmark or back button lands on the same page.
-// "/" and unknown paths mean the default tab.
+// Pages in nav order. The current one lives in the URL path (see route.js),
+// so a reload, bookmark or back button lands on the same page. `menu` pages
+// sit behind the 管理 menu instead of taking a slot in the bar.
 const TABS = {
   probe: { label: '拨测' },
   monitors: { label: '监控', admin: true },
   agents: { label: '节点' },
   history: { label: '历史' },
-  notify: { label: '通知', admin: true },
-  settings: { label: '设置', admin: true },
+  notify: { label: '通知', admin: true, menu: true },
+  settings: { label: '设置', admin: true, menu: true },
 }
-function tabFromURL() {
-  const name = location.pathname.replace(/^\/+|\/+$/g, '')
-  return name in TABS ? name : 'probe'
-}
-const tab = ref(tabFromURL())
+const tab = computed(() => route.page)
 function go(name, replace = false) {
-  tab.value = name
-  if (tabFromURL() === name) return
-  window.history[replace ? 'replaceState' : 'pushState'](null, '', '/' + name)
+  menuOpen.value = false
+  if (route.page === name && !route.taskId) return
+  navigate(name === 'probe' ? '/' : '/' + name, { replace })
 }
-function onPopState() { tab.value = tabFromURL(); ensureAllowed() }
+const menuOpen = ref(false)
+function onDocClick(e) { if (!e.target.closest?.('.nav-menu')) menuOpen.value = false }
 const session = ref(null)
 const showLogin = ref(false)
 const username = ref('admin')
 const password = ref('')
 const loginError = ref('')
 const busy = ref(false)
-const historyTaskId = ref('')
 const monitorId = ref('')
 
 const isAdmin = computed(() => session.value?.role === 'admin')
@@ -79,27 +76,29 @@ function onUnauthorized() {
   if (session.value && session.value.authenticated) { session.value.authenticated = false; session.value.role = session.value.guest_enabled ? 'guest' : '' }
   showLogin.value = true
 }
-function openHistory(id) { historyTaskId.value = id; go('history') }
+// A task opened from a list (history, a monitor's runs) is shown on the probe
+// page under its own link.
+function openTask(id) { navigate(taskPath(id)) }
 async function onRelogin(msg) { await loadSession(); loginError.value = msg || ''; showLogin.value = true }
 
 onMounted(() => {
-  const params = new URLSearchParams(location.search)
-  if (params.get('login_error')) {
-    loginError.value = params.get('login_error')
+  if (route.query.login_error) {
+    loginError.value = route.query.login_error
     showLogin.value = true
-    history.replaceState(null, '', location.pathname)
-  } else if (params.get('id')) {
-    monitorId.value = params.get('id')
+    navigate(location.pathname, { replace: true })
+  } else if (route.page === 'monitors' && route.query.id) {
+    monitorId.value = route.query.id
   }
   loadSession()
   window.addEventListener('probe:unauthorized', onUnauthorized)
-  window.addEventListener('popstate', onPopState)
+  document.addEventListener('click', onDocClick)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('probe:unauthorized', onUnauthorized)
-  window.removeEventListener('popstate', onPopState)
+  document.removeEventListener('click', onDocClick)
 })
-watch(tab, (t) => { document.title = `${TABS[t].label} · 拨测平台` }, { immediate: true })
+// The probe page titles itself after the probe type.
+watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨测平台`; ensureAllowed() }, { immediate: true })
 </script>
 
 <template>
@@ -108,8 +107,16 @@ watch(tab, (t) => { document.title = `${TABS[t].label} · 拨测平台` }, { imm
       <div class="brand"><span class="dot"></span> 拨测平台</div>
       <nav class="nav" v-if="session && !gated">
         <template v-for="(def, name) in TABS" :key="name">
-          <button v-if="!def.admin || isAdmin" :class="{ active: tab === name }" @click="go(name)">{{ def.label }}</button>
+          <button v-if="!def.menu && (!def.admin || isAdmin)" :class="{ active: tab === name }" :aria-current="tab === name ? 'page' : undefined" @click="go(name)">{{ def.label }}</button>
         </template>
+        <div class="nav-menu" v-if="isAdmin">
+          <button :class="{ active: TABS[tab].menu }" aria-haspopup="menu" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">{{ TABS[tab].menu ? TABS[tab].label : '管理' }} ▾</button>
+          <div class="nav-pop" v-if="menuOpen" role="menu">
+            <template v-for="(def, name) in TABS" :key="name">
+              <button v-if="def.menu" role="menuitem" :class="{ active: tab === name }" @click="go(name)">{{ def.label }}</button>
+            </template>
+          </div>
+        </div>
       </nav>
       <div class="spacer"></div>
       <div class="meta" v-if="session">
@@ -152,12 +159,12 @@ watch(tab, (t) => { document.title = `${TABS[t].label} · 拨测平台` }, { imm
 
     <template v-if="session && !gated">
       <div v-show="!showLogin">
-        <ProbeView v-show="tab === 'probe'" :role="session.role" @open-history="openHistory" />
-        <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openHistory" />
+        <ProbeView v-show="tab === 'probe'" :role="session.role" />
+        <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openTask" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
         <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" :admin="isAdmin" />
-        <HistoryView v-if="tab === 'history'" :initial-id="historyTaskId" :admin="isAdmin" />
+        <HistoryView v-if="tab === 'history'" :admin="isAdmin" />
       </div>
     </template>
   </div>

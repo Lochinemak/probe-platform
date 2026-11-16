@@ -114,6 +114,11 @@ type Params struct {
 	// callers cannot aim the agents at loopback, a home LAN or cloud metadata.
 	// It is never honoured from client input: the server overwrites it.
 	PublicOnly bool `json:"public_only,omitempty"`
+	// Continuous marks a ping / tcping run as "持续检测": a long sampling run
+	// rather than a one-off check. Agents ignore it (Count and IntervalMs say
+	// what to do); the server uses it for guest limits and the dashboard to
+	// pick the table layout.
+	Continuous bool `json:"continuous,omitempty"`
 
 	// ping
 	PacketSize int `json:"packet_size,omitempty"`
@@ -472,6 +477,10 @@ const (
 	StatusDone    ResultStatus = "done"
 	StatusError   ResultStatus = "error"
 )
+
+// ErrStopped is AgentResult.Error on a StatusDone result that was cut short
+// because the user stopped the task: Data holds what was measured until then.
+const ErrStopped = "stopped"
 
 // AgentResult is the dashboard view of one agent's outcome for a task.
 type AgentResult struct {

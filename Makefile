@@ -4,7 +4,7 @@ LDFLAGS  = -s -w -X probe-platform/internal/buildinfo.Version=$(VERSION)
 GOFLAGS  = -trimpath
 BIN      = bin
 
-.PHONY: all web server agent build agents-all docker run-server run-agent test lint clean geoip-db
+.PHONY: all web server agent build agents-all docker run-server run-agent test test-web lint clean geoip-db
 
 all: build
 
@@ -57,6 +57,10 @@ run-agent:
 
 test:
 	go test ./...
+
+## test-web: unit tests for the dashboard's pure JS modules (vitest)
+test-web:
+	cd web && npm install --no-fund --no-audit && npm test
 
 lint:
 	go vet ./...

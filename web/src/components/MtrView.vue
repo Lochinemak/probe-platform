@@ -18,7 +18,7 @@ defineProps({ task: Object, results: Array })
         <span class="spacer"></span>
         <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
         <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
-        <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
+        <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
       </div>
       <div class="table-wrap" v-if="r.hops?.length">
         <table class="grid">

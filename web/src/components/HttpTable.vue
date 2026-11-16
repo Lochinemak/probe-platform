@@ -70,7 +70,7 @@ function phaseWidths(t) {
               <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
               <ErrorBadge v-else-if="r.status === 'error' || (r.last && !r.last.ok)" :message="r.error || r.last?.error || '失败'" />
               <ErrorBadge v-else-if="r.assertFail" :message="'断言未通过：\n' + r.failedAssertions.join('\n')" />
-              <span v-else class="badge" :class="r.status">{{ statusLabel(r.status) }}</span>
+              <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
             </td>
           </tr>
           <tr v-if="open[r.agent_id]">
