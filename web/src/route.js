@@ -5,6 +5,7 @@
 //   /                       probe page, last used probe type
 //   /ping /tcping /http /udp /dns /mtr /tls /dns_compare /status
 //                           probe page with that type (?target= prefills the form)
+//   /http3                  the HTTP probe page with HTTP/3 switched on
 //   /t/<taskId>             probe page showing that task
 //   /s/<token>              a shared result: public, read-only, no session needed
 //   /coverage /monitors …    the other pages
@@ -23,6 +24,8 @@ export function parse(pathname, search = '') {
   if (head === 't' && arg && parts.length === 2) return { page: 'probe', type: '', taskId: decodeURIComponent(arg), query }
   if (head === 's' && arg && parts.length === 2) return { page: 'share', type: '', taskId: '', token: decodeURIComponent(arg), query }
   if (parts.length === 1 && PROBE_TYPES.includes(head)) return { page: 'probe', type: head, taskId: '', query }
+  // HTTP/3 is the HTTP probe with one switch on, not a type of its own.
+  if (parts.length === 1 && head === 'http3') return { page: 'probe', type: 'http', taskId: '', query: { ...query, http3: '1' } }
   if (parts.length === 1 && PAGES.includes(head)) return { page: head, type: '', taskId: '', query }
   // "/" and anything unknown: the probe page with whatever type was used last.
   return { page: 'probe', type: '', taskId: '', query }

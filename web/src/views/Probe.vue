@@ -54,7 +54,7 @@ const DEFAULTS = {
   dns_compare: { record_type: 'A', timeout_ms: 3000, ip_version: '' },
   status: {},
 }
-const HTTP_EXTRA = { headers: '', body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, speed_test: false, speed_seconds: 5, user_agent: '', referer: '', cookie: '' }
+const HTTP_EXTRA = { headers: '', body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, speed_test: false, speed_seconds: 5, user_agent: '', referer: '', cookie: '', http3: false }
 
 // Where the node connects and whom it asks, for the probes that connect to
 // the target: 指定连接 IP sends the probe to another address while the target
@@ -67,6 +67,8 @@ const net = reactive({ ...NET })
 const hasNet = computed(() => NET_TYPES.includes(type.value))
 const resolver = computed(() => (net.resolver_mode === 'public' ? net.resolver_public : net.resolver_mode === 'custom' ? net.resolver_custom.trim() : ''))
 const needResolver = computed(() => hasNet.value && !!(net.connect_to.trim() || resolver.value))
+// HTTP/3 goes over QUIC, which only agents built with it can speak.
+const needHttp3 = computed(() => type.value === 'http' && httpExtra.http3)
 
 // DNS 对比: which resolvers every node asks.
 const COMPARE_PRESETS = {
@@ -99,7 +101,12 @@ watch(target, (t) => {
     if (v.ok && v.port) params[type.value].port = v.port
   }
 })
+function setHttp3(on) {
+  httpExtra.http3 = on
+  if (on) setScheme('https')
+}
 function setScheme(s) {
+  if (s === 'http') httpExtra.http3 = false // HTTP/3 is always encrypted
   scheme.value = s
   if (/^https?:\/\//i.test(target.value.trim())) target.value = target.value.trim().replace(/^https?/i, s)
 }
@@ -167,6 +174,7 @@ function buildParams(continuous) {
     for (const k of ['referer', 'cookie']) if (httpExtra[k].trim()) p[k] = httpExtra[k].trim()
   }
   if (t === 'http' && httpExtra.user_agent.trim()) p.user_agent = httpExtra.user_agent.trim()
+  if (t === 'http' && httpExtra.http3) p.http3 = true
   if (t === 'mtr' && p.protocol === 'icmp') delete p.port
   if (t === 'mtr' && mtrExtra.quick) p.count = 1
   if (t === 'udp' && !isAdmin.value) delete p.payload // guests send the built-in payload
@@ -185,6 +193,7 @@ async function run(mode = 'once') {
   error.value = ''
   const v = validateTarget(type.value, target.value, { scheme: scheme.value, port: params[type.value].port })
   if (!v.ok) { targetError.value = v.error; targetBox.value?.focus(); return }
+  if (needHttp3.value && /^http:\/\//i.test(v.target || target.value.trim())) { targetError.value = 'HTTP/3 只支持 https 地址'; targetBox.value?.focus(); return }
   if (type.value === 'dns_compare' && (!compareServers.value.length || compareServers.value.length > 6)) { error.value = '对比解析器要填 1 到 6 个，例如 system,223.5.5.5,1.1.1.1'; return }
   if (net.resolver_mode === 'custom' && hasNet.value && !resolver.value) { error.value = '选了自定义 DNS，请填写 DNS 服务器地址'; return }
   if (selected.value.size === 0) { error.value = '当前范围内没有可用的在线节点，请调整节点范围'; return }
@@ -246,7 +255,7 @@ function fillForm(t) {
     Object.assign(httpExtra, HTTP_EXTRA, {
       headers: formatHeaders(p.headers), body: p.body || '', expect_status: p.expect_status || 0, expect_keyword: p.expect_keyword || '',
       expect_max_ms: p.expect_max_ms || 0, speed_test: !!p.speed_test, speed_seconds: p.speed_seconds || 5,
-      user_agent: p.user_agent || '', referer: p.referer || '', cookie: p.cookie || '',
+      user_agent: p.user_agent || '', referer: p.referer || '', cookie: p.cookie || '', http3: !!p.http3,
     })
     const simple = (p.method || 'GET') === 'GET' && (p.count || 1) === 1 && p.follow_redirects && !p.insecure_tls && !p.headers && !p.body
       && !p.expect_status && !p.expect_keyword && !p.expect_max_ms && !p.speed_test
@@ -313,8 +322,9 @@ watch(() => [route.page, route.type, route.taskId], ([page, t, id]) => {
   if (t !== type.value) setType(t)
   // /http?target=… prefills the box, e.g. from "发起同类探测"; /dns?dns_server=…
   // comes from the DNS directory's "用它解析".
-  if (route.query.target || route.query.dns_server) {
+  if (route.query.target || route.query.dns_server || route.query.http3) {
     if (route.query.target) target.value = route.query.target
+    if (route.query.http3 && t === 'http') setHttp3(true) // /http3 is the HTTP page with HTTP/3 on
     if (route.query.dns_server && t === 'dns') { params.dns.dns_server = route.query.dns_server; showAdvanced.value = true }
     navigate('/' + t, { replace: true })
   }
@@ -378,6 +388,10 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
       <div class="row probe-opts">
         <span class="sub">{{ info.hint }}<template v-if="hasContinuous"> · 持续检测：{{ cont.count }} 次 · {{ cont.interval_ms }} ms</template></span>
         <span class="spacer"></span>
+        <div class="tabs sm" v-if="type === 'http'" role="group" aria-label="HTTP 版本">
+          <button type="button" :class="{ active: !httpExtra.http3 }" title="HTTP/1.1 或 HTTP/2（TCP），由服务器协商" @click="setHttp3(false)">HTTP/1.1 · 2</button>
+          <button type="button" :class="{ active: httpExtra.http3 }" title="HTTP/3（QUIC，走 UDP 443）；只支持 https，握手耗时记在 TLS 一栏" @click="setHttp3(true)">HTTP/3</button>
+        </div>
         <div class="tabs sm" v-if="type === 'http'" role="group" aria-label="请求模式">
           <button type="button" :class="{ active: httpMode === 'simple' }" title="一次普通 GET，只看状态码和耗时" @click="httpMode = 'simple'">简易</button>
           <button type="button" :class="{ active: httpMode === 'full' }" title="自定义方法、次数、断言等完整请求选项" @click="httpMode = 'full'">完整</button>
@@ -518,7 +532,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
       </div>
     </div>
 
-    <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" :need-resolver="needResolver" />
+    <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" :need-resolver="needResolver" :need-http3="needHttp3" />
 
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
 

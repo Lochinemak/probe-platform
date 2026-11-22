@@ -11,6 +11,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20260901011515-c1a1fc7d5941
 	github.com/prometheus-community/pro-bing v0.9.1
+	github.com/quic-go/quic-go v0.65.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.37.0
@@ -24,8 +25,10 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect

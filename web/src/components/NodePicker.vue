@@ -16,6 +16,8 @@ const props = defineProps({
   // The task uses connect_to or a custom resolver, which older agents would
   // silently ignore.
   needResolver: Boolean,
+  // The task asks for HTTP/3, which agents built without QUIC cannot do.
+  needHttp3: Boolean,
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -40,6 +42,7 @@ function blocker(a) {
   const isNew = ['udp', 'tls', 'dns_compare', 'status'].includes(props.type)
   if (isNew && !caps.includes(need[0])) return need[1]
   if (props.needResolver && !caps.includes('resolver')) return 'agent 版本过旧，不支持指定连接 IP / 解析 DNS'
+  if (props.needHttp3 && !caps.includes('http3')) return '不支持 HTTP/3（agent 版本过旧，或是不带 QUIC 的精简构建）'
   if (!caps.length) return ''
   if (need && !caps.includes(need[0])) return need[1]
   if (props.ipVersion === '6' && !caps.includes('ipv6')) return '没有 IPv6 出口'

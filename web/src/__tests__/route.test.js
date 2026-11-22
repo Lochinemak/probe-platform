@@ -7,6 +7,7 @@ describe('parse', () => {
     expect(parse('/ping')).toMatchObject({ page: 'probe', type: 'ping', taskId: '' })
     expect(parse('/tcping/')).toMatchObject({ page: 'probe', type: 'tcping' })
     expect(parse('/http', '?target=example.com')).toMatchObject({ page: 'probe', type: 'http', query: { target: 'example.com' } })
+    expect(parse('/http3', '?target=example.com')).toMatchObject({ page: 'probe', type: 'http', query: { target: 'example.com', http3: '1' } })
   })
   it('maps task links', () => {
     expect(parse('/t/mabc123')).toMatchObject({ page: 'probe', type: '', taskId: 'mabc123' })

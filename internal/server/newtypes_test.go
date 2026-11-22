@@ -32,6 +32,9 @@ func TestMissingCap(t *testing.T) {
 		{"old agent, resolver", older, protocol.TaskPing, protocol.Params{Resolver: "223.5.5.5"}, protocol.CapResolver},
 		{"the system resolver is what an old agent uses anyway", older, protocol.TaskPing, protocol.Params{Resolver: "system"}, ""},
 		{"new agent", newer, protocol.TaskTLS, protocol.Params{ConnectTo: "1.2.3.4", Resolver: "223.5.5.5"}, ""},
+		{"HTTP/3 on an agent without QUIC", newer, protocol.TaskHTTP, protocol.Params{HTTP3: true}, protocol.CapHTTP3},
+		{"HTTP/3 on an agent with QUIC", append([]string{protocol.CapHTTP3}, newer...), protocol.TaskHTTP, protocol.Params{HTTP3: true}, ""},
+		{"the flag means nothing to other probes", newer, protocol.TaskPing, protocol.Params{HTTP3: true}, ""},
 	} {
 		if got := missingCap(c.have, c.typ, c.p); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
@@ -100,7 +103,7 @@ func TestCapabilityGate(t *testing.T) {
 func TestGuestParamsAllowList(t *testing.T) {
 	everything := protocol.Params{
 		Count: 99, IntervalMs: 10, TimeoutMs: 1500, IPVersion: "4", PublicOnly: false, Continuous: true, PacketSize: 64, Port: 8443,
-		Method: "DELETE", Headers: map[string]string{"X": "y"}, Body: "b", FollowRedirects: true, InsecureTLS: true,
+		Method: "DELETE", Headers: map[string]string{"X": "y"}, Body: "b", FollowRedirects: true, InsecureTLS: true, HTTP3: true,
 		ExpectStatus: 200, ExpectKeyword: "k", ExpectMaxMs: 9, SpeedTest: true, SpeedSeconds: 30,
 		MaxHops: 20, Resolve: true, Protocol: "tcp", RecordType: "MX", DNSServer: "1.1.1.1",
 		ConnectTo: " 1.2.3.4 ", Resolver: "223.5.5.5", UserAgent: "curl/8", Referer: "https://r", Cookie: "sid=1",
@@ -117,7 +120,7 @@ func TestGuestParamsAllowList(t *testing.T) {
 	}
 	check(protocol.TaskPing, protocol.Params{Count: 60, IntervalMs: 200, Continuous: true, PacketSize: 64})
 	check(protocol.TaskTCPing, protocol.Params{Count: 60, IntervalMs: 200, Continuous: true, Port: 8443})
-	check(protocol.TaskHTTP, protocol.Params{Count: 3, IntervalMs: 200, Method: "GET", FollowRedirects: true, ExpectStatus: 200, ExpectKeyword: "k", ExpectMaxMs: 9, UserAgent: "curl/8"})
+	check(protocol.TaskHTTP, protocol.Params{Count: 3, IntervalMs: 200, Method: "GET", FollowRedirects: true, HTTP3: true, ExpectStatus: 200, ExpectKeyword: "k", ExpectMaxMs: 9, UserAgent: "curl/8"})
 	check(protocol.TaskMTR, protocol.Params{Count: 10, IntervalMs: 200, MaxHops: 20, Resolve: true, Protocol: "tcp", Port: 8443})
 	check(protocol.TaskDNS, protocol.Params{Count: 5, IntervalMs: 200, RecordType: "MX", DNSServer: "1.1.1.1"})
 	// A guest's datagram carries the built-in payload, never their own.

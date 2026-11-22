@@ -21,7 +21,8 @@ RUN set -e; mkdir -p /out/agents; \
       os=${t%%/*}; rest=${t#*/}; arch=${rest%%/*}; arm=""; variant=""; \
       case "$rest" in */*) arm=${rest#*/}; variant="v$arm";; esac; \
       ext=""; [ "$os" = windows ] && ext=".exe"; \
-      CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm GOMIPS=softfloat go build -trimpath \
+      tags=""; case "$arch" in mips|mipsle) tags=noquic;; esac; \
+      CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm GOMIPS=softfloat go build -trimpath -tags "$tags" \
         -ldflags "-s -w -X probe-platform/internal/buildinfo.Version=$VERSION -X probe-platform/internal/buildinfo.Variant=$variant" \
         -o /out/agents/probe-agent-$os-$arch$variant$ext ./cmd/agent; \
     done; \

@@ -750,6 +750,10 @@ func (h *Hub) createTask(typ protocol.TaskType, target string, params protocol.P
 		// else as if nothing were wrong.
 		if missing := missingCap(ac.snapshot().Capabilities, typ, params); missing != "" {
 			res.Status, res.Error = protocol.StatusError, "unsupported: 节点版本过旧，不支持这项探测或参数（缺少能力 "+missing+"），请升级该节点的 agent"
+			if missing == protocol.CapHTTP3 {
+				// Not necessarily old: the builds for small routers leave QUIC out.
+				res.Error = "unsupported: 该节点的 agent 不支持 HTTP/3（缺少能力 http3）：版本过旧，或是不带 QUIC 的精简构建（MIPS 路由器）"
+			}
 			now := time.Now()
 			res.FinishedAt = &now
 			continue
@@ -1042,6 +1046,9 @@ func missingCap(have []string, typ protocol.TaskType, p protocol.Params) string 
 	}
 	if p.ConnectTo != "" || (p.Resolver != "" && !strings.EqualFold(p.Resolver, "system")) {
 		need = append(need, protocol.CapResolver)
+	}
+	if typ == protocol.TaskHTTP && p.HTTP3 {
+		need = append(need, protocol.CapHTTP3)
 	}
 next:
 	for _, n := range need {

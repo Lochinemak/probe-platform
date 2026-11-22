@@ -6,7 +6,7 @@
 | --- | --- |
 | **ICMP Ping** | 延迟 / 丢包 / 抖动，逐包实时回传；单次检测，或「持续检测」连续采样（默认 100 次 · 1000 ms） |
 | **TCPing** | TCP 握手延迟、端口连通性；同样支持持续检测 |
-| **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
+| **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；可切到 **HTTP/3**（QUIC）；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
 | **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
 | **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV / CAA / HTTPS / SVCB / DS / DNSKEY / TLSA，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
 | **UDP 探测** | 向 UDP 端口发一个数据报：收到回应、收到「端口不可达」还是没有任何响应；53 端口自动发 DNS 查询 |
@@ -89,6 +89,7 @@ curl -fsSL $PROBE_SERVER/install-agent-openwrt.sh | sh
 ```
 
 - 占用约 8 MB overlay 空间、10 MB 内存；128 MB 闪存 / 512 MB 内存的机器绰绰有余，16 MB 闪存的老路由不建议。
+- 32 位 MIPS（`mips` / `mipsle`）的 agent 用 `-tags noquic` 构建，不带 HTTP/3，体积小约 1.7 MB；其余架构都带。
 - 架构按 `uname -m` 自动选择：`aarch64`（MT7981 / MT7986 Filogic、RK3568 等）用 arm64；`mips`（MT7621 等）用 32 位 MIPS 软浮点构建，脚本会从 `/bin/sh` 的 ELF 头判断大小端。x86 软路由用 amd64。
 - 装好后 `logread -e probe-agent` 看日志，`/etc/init.d/probe-agent restart` 重启，配置在 `/etc/probe-agent.env`。自更新同样有效。
 - 如果这台路由器自己就在跑 OpenClash，它本机的 DNS 也是 fake-IP，域名类探测会失真；这种情况下把节点装在路由器后面的机器上更合适，或者用旁路由 / 二级 AP 上的 iStoreOS 做节点。
@@ -236,7 +237,7 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 
 | 地址 | 页面 |
 | --- | --- |
-| `/ping` `/tcping` `/http` `/udp` `/dns` `/mtr` `/tls` `/dns_compare` `/status` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
+| `/ping` `/tcping` `/http` `/udp` `/dns` `/mtr` `/tls` `/dns_compare` `/status` | 拨测页对应的检测类型；`?target=example.com` 预填目标。`/http3` 是打开了 HTTP/3 开关的 HTTP 检测 |
 | `/t/<任务 ID>` | 某一次检测的结果：进行中的实时更新，结束的从历史读取，表单同时回填成当时的参数。游客只能打开自己发起的 |
 | `/s/<分享码>` | 分享出去的检测结果：只读，不用登录就能打开（关闭了游客访问也一样），见下面「分享与截图」 |
 | `/ip` | IP 定位：查询任意公网 IP 的归属地、运营商、线路类型（开启在线查询时还有 ASN、网络类型、估算坐标）；对照「本站看到的出口」和「境外站点看到的出口」判断是否按目的地分流 |
@@ -354,6 +355,7 @@ curl -H "Authorization: Bearer <节点 token>" localhost:8080/api/agent/download
 | `packet_size` | ping | 负载大小，默认 56 |
 | `port` | tcping | 目标里没写端口时使用，默认 80 |
 | `method` / `headers` / `body` / `follow_redirects` / `insecure_tls` | http | |
+| `http3` | http | `true` 时走 HTTP/3（QUIC，UDP 443）而不是 HTTP/1.1 / HTTP/2。只支持 https；没有单独的 TCP 连接，`connect_ms` 为 0，QUIC 握手（含 TLS）记在 `tls_ms`。需要节点声明 `http3` 能力：32 位 MIPS 的构建不带 QUIC，旧版 agent 也没有，这些节点会明确报「不支持」。域名被解析成 fake-IP 时直接报错（经透明代理的 QUIC 测不出线路本身） |
 | `max_hops` / `resolve` | mtr | 最大跳数（默认 30）、是否反向解析 |
 | `protocol` / `port` | mtr | `icmp`（默认）、`tcp`（SYN，默认 80 端口）、`udp`（默认 33434） |
 | `expect_status` / `expect_keyword` / `expect_max_ms` | http | 断言：状态码（0 = 任意 < 400）、响应体关键字、总耗时上限 |

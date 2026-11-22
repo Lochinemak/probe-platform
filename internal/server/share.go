@@ -145,7 +145,7 @@ func (o shareOpts) scrubTask(t *protocol.Task) *protocol.Task {
 		Target: o.name(t.Target),
 		Params: protocol.Params{
 			Count: p.Count, IntervalMs: p.IntervalMs, TimeoutMs: p.TimeoutMs, IPVersion: p.IPVersion, Continuous: p.Continuous,
-			PacketSize: p.PacketSize, Method: p.Method, FollowRedirects: p.FollowRedirects, SpeedTest: p.SpeedTest,
+			PacketSize: p.PacketSize, Method: p.Method, FollowRedirects: p.FollowRedirects, SpeedTest: p.SpeedTest, HTTP3: p.HTTP3,
 			MaxHops: p.MaxHops, Resolve: p.Resolve, Protocol: p.Protocol, RecordType: p.RecordType,
 			PayloadMode: p.PayloadMode, NoWait: p.NoWait, ExpectCertDays: p.ExpectCertDays,
 		},

@@ -227,7 +227,7 @@ func runSelfTest(args []string) int {
 					return 2
 				}
 				extra[k] = n
-			case "follow_redirects", "insecure_tls", "speed_test", "resolve", "no_wait":
+			case "follow_redirects", "insecure_tls", "speed_test", "resolve", "no_wait", "http3":
 				extra[k] = v == "true" || v == "1"
 			case "dns_servers": // dns_compare: system,223.5.5.5,1.1.1.1
 				extra[k] = strings.Split(v, ",")

@@ -19,6 +19,9 @@ import (
 	"probe-platform/internal/protocol"
 )
 
+// errNoHTTP3 is what a build without QUIC answers an HTTP/3 request with.
+var errNoHTTP3 = errors.New("this agent build has no HTTP/3 support")
+
 const (
 	maxBodyRead  = 8 << 20   // read at most 8 MiB to time the transfer
 	maxSpeedRead = 512 << 20 // hard cap for a speed-test download
@@ -28,6 +31,10 @@ const (
 // breakdown (DNS, TCP connect, TLS, TTFB, transfer) for each. When redirects
 // are followed the phase timings describe the final request while TotalMs
 // covers the whole chain.
+//
+// With Params.HTTP3 the requests go over HTTP/3 (QUIC, UDP) instead of
+// HTTP/1.1 or HTTP/2: there is no separate TCP connect, so ConnectMs stays 0
+// and TLSMs is the QUIC handshake, which includes the TLS one.
 //
 // progress receives one "attempt" (protocol.HTTPAttempt) per request.
 func HTTP(ctx context.Context, target string, p protocol.Params, progress ProgressFunc) (*protocol.HTTPResult, error) {
@@ -49,6 +56,19 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	if p.HTTP3 {
+		// HTTP/3 runs over QUIC, which is always encrypted. A target written
+		// without a scheme means https here.
+		if !strings.Contains(strings.TrimSpace(target), "://") {
+			u.Scheme = "https"
+		}
+		if u.Scheme != "https" {
+			return nil, errors.New("HTTP/3 只支持 https 地址")
+		}
+		if !HasHTTP3 {
+			return nil, errNoHTTP3
+		}
 	}
 	// Unlike ping / tcping / mtr, a fake-IP answer does not abort an HTTP
 	// probe: the request still reaches the real site through the transparent
@@ -225,44 +245,27 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 	if u, err := url.Parse(rawURL); err == nil {
 		origHost = u.Hostname()
 	}
-	transport := &http.Transport{
-		Proxy: nil, // always measure the direct path, ignore HTTP_PROXY
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			if host, port, err := net.SplitHostPort(addr); err == nil {
-				q := p
-				if !strings.EqualFold(host, origHost) {
-					q.ConnectTo = "" // a redirect to another host goes where that host is
-				}
-				if q.ConnectTo != "" || (q.Resolver != "" && net.ParseIP(host) == nil) {
-					clock.mu.Lock()
-					clock.dnsStart = time.Now()
-					clock.mu.Unlock()
-					// The lookup gets a context without the request's trace:
-					// its own DNS connection is not the one being measured.
-					rctx, cancel := untraced(ctx)
-					ip, err := ResolveTarget(rctx, host, q)
-					cancel()
-					clock.mu.Lock()
-					clock.dnsDone = time.Now()
-					clock.mu.Unlock()
-					if err != nil {
-						return nil, err
-					}
-					addr = net.JoinHostPort(ip.String(), port)
-				}
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
-		DisableKeepAlives:     true,
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   timeout,
-		ResponseHeaderTimeout: timeout,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: p.InsecureTLS}, //nolint:gosec // operator-controlled toggle
+	var rt http.RoundTripper
+	if p.HTTP3 {
+		// The QUIC dial times its own phases (see newH3RoundTripper); the
+		// hooks for a TCP connection and a separate TLS handshake are off.
+		trace.DNSStart, trace.DNSDone, trace.ConnectStart, trace.ConnectDone = nil, nil, nil, nil
+		trace.TLSHandshakeStart, trace.TLSHandshakeDone = nil, nil
+		h3, closeH3, err := newH3RoundTripper(p, timeout, clock, origHost)
+		if err != nil {
+			a.Error = ErrString(err)
+			return a
+		}
+		defer closeH3()
+		rt = h3
+	} else {
+		t := tcpRoundTripper(p, timeout, clock, origHost, dialer, network)
+		defer t.CloseIdleConnections()
+		rt = t
 	}
-	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
-		Transport: transport,
+		Transport: rt,
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if !p.FollowRedirects {
@@ -305,6 +308,7 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 	}
 
 	resp, err := client.Do(req)
+	gotHeaders := time.Now()
 	if err != nil {
 		a.Error = ErrString(err)
 		a.Timing.TotalMs = ms(time.Since(clock.start))
@@ -345,6 +349,14 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 
 	clock.mu.Lock()
 	defer clock.mu.Unlock()
+	// A transport that does not report when the request went out or the
+	// response began: the headers were in by the time Do returned.
+	if clock.firstByte.IsZero() {
+		clock.firstByte = gotHeaders
+	}
+	if clock.wroteReq.IsZero() && !clock.tlsDone.IsZero() {
+		clock.wroteReq = clock.tlsDone
+	}
 
 	a.OK = true
 	a.StatusCode = resp.StatusCode
@@ -388,6 +400,45 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 
 	a.Assertions, a.AssertOK = evalAssertions(p, &a, bodyBuf.Bytes())
 	return a
+}
+
+// tcpRoundTripper is the transport for HTTP/1.1 and HTTP/2: one connection
+// per request, timed by the request's httptrace hooks.
+func tcpRoundTripper(p protocol.Params, timeout time.Duration, clock *phaseClock, origHost string, dialer *net.Dialer, network string) *http.Transport {
+	return &http.Transport{
+		Proxy: nil, // always measure the direct path, ignore HTTP_PROXY
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil {
+				q := p
+				if !strings.EqualFold(host, origHost) {
+					q.ConnectTo = "" // a redirect to another host goes where that host is
+				}
+				if q.ConnectTo != "" || (q.Resolver != "" && net.ParseIP(host) == nil) {
+					clock.mu.Lock()
+					clock.dnsStart = time.Now()
+					clock.mu.Unlock()
+					// The lookup gets a context without the request's trace:
+					// its own DNS connection is not the one being measured.
+					rctx, cancel := untraced(ctx)
+					ip, err := ResolveTarget(rctx, host, q)
+					cancel()
+					clock.mu.Lock()
+					clock.dnsDone = time.Now()
+					clock.mu.Unlock()
+					if err != nil {
+						return nil, err
+					}
+					addr = net.JoinHostPort(ip.String(), port)
+				}
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+		DisableKeepAlives:     true,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: p.InsecureTLS}, //nolint:gosec // operator-controlled toggle
+	}
 }
 
 // evalAssertions applies the configured checks. When no status is expected,

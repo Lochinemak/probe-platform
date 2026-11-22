@@ -11,10 +11,14 @@ import (
 // DetectCapabilities probes the local environment and reports what this agent
 // can do. Values: tcp, http, icmp (any ping), icmp_raw (raw socket), mtr, ipv6,
 // plus what this build knows how to do beyond the original five probes: udp,
-// tls, dns_multi (dns_compare), status, and resolver (the connect_to /
-// resolver parameters). The server only sends an agent what it has announced.
+// tls, dns_multi (dns_compare), status, resolver (the connect_to /
+// resolver parameters) and http3 (the http3 parameter; absent from noquic
+// builds). The server only sends an agent what it has announced.
 func DetectCapabilities() []string {
 	caps := []string{"tcp", "http", "udp", "tls", "dns_multi", "status", protocol.CapResolver}
+	if HasHTTP3 {
+		caps = append(caps, protocol.CapHTTP3)
+	}
 	raw := false
 	if c, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0"); err == nil {
 		c.Close()

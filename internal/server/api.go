@@ -240,7 +240,7 @@ func guestParams(typ protocol.TaskType, in protocol.Params) protocol.Params {
 		if strings.EqualFold(strings.TrimSpace(in.Method), "HEAD") {
 			p.Method = "HEAD"
 		}
-		p.FollowRedirects = in.FollowRedirects
+		p.FollowRedirects, p.HTTP3 = in.FollowRedirects, in.HTTP3
 		p.ExpectStatus, p.ExpectKeyword, p.ExpectMaxMs = in.ExpectStatus, in.ExpectKeyword, in.ExpectMaxMs
 		if ua := strings.TrimSpace(in.UserAgent); len(ua) <= 200 && !strings.ContainsAny(ua, "\r\n") {
 			p.UserAgent = ua
@@ -800,6 +800,12 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if !continuousType(req.Type) {
 		req.Params.Continuous = false
+	}
+	if req.Type != protocol.TaskHTTP {
+		req.Params.HTTP3 = false
+	} else if req.Params.HTTP3 && strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Target)), "http://") {
+		writeErr(w, http.StatusBadRequest, "HTTP/3 只支持 https 地址")
+		return
 	}
 	owner := a.auth.owner(r)
 	if a.auth.role(r) == roleGuest {

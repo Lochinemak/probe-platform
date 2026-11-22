@@ -61,7 +61,7 @@ function cleanParams(e) {
   const keep = {
     ping: ['count', 'timeout_ms', 'interval_ms', 'packet_size', 'ip_version'],
     tcping: ['count', 'timeout_ms', 'interval_ms', 'port', 'ip_version'],
-    http: ['count', 'timeout_ms', 'method', 'follow_redirects', 'insecure_tls', 'body', 'expect_status', 'expect_keyword', 'expect_max_ms', 'ip_version'],
+    http: ['count', 'timeout_ms', 'method', 'follow_redirects', 'insecure_tls', 'http3', 'body', 'expect_status', 'expect_keyword', 'expect_max_ms', 'ip_version'],
     mtr: ['count', 'timeout_ms', 'max_hops', 'protocol', 'port', 'resolve', 'ip_version'],
     dns: ['count', 'timeout_ms', 'record_type', 'dns_server', 'ip_version'],
     udp: ['count', 'timeout_ms', 'interval_ms', 'port', 'ip_version'],
@@ -144,6 +144,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <div class="field"><label>耗时上限 (ms)</label><input type="number" min="0" v-model.number="editing.params.expect_max_ms" /></div>
               <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.params.follow_redirects" /> 跟随重定向</label>
               <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="editing.params.insecure_tls" /> 忽略证书错误</label>
+              <label class="field inline" style="margin-top:18px" title="走 QUIC（UDP 443），只支持 https；不带 QUIC 的节点会报不支持"><input type="checkbox" v-model="editing.params.http3" /> HTTP/3</label>
               <div class="field" style="flex-basis:100%"></div>
               <div class="field grow"><label>自定义 Header（每行一个，Key: Value）</label><textarea rows="2" v-model="headersText" placeholder="User-Agent: MyProbe/1.0&#10;Host: example.com" spellcheck="false"></textarea></div>
               <div class="field grow" v-if="!['GET', 'HEAD'].includes(editing.params.method)"><label>请求体</label><textarea rows="2" v-model="editing.params.body" spellcheck="false"></textarea></div>

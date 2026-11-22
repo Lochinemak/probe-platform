@@ -72,6 +72,10 @@ func (t TaskType) Capability() string {
 // agent without it would silently ignore both and measure the wrong thing.
 const CapResolver = "resolver"
 
+// CapHTTP3 is the capability for Params.HTTP3. Agent builds without QUIC
+// (-tags noquic) do not announce it.
+const CapHTTP3 = "http3"
+
 // Message is the envelope for every WebSocket frame between agent and server.
 type Message struct {
 	Type    string          `json:"type"`
@@ -177,11 +181,14 @@ type Params struct {
 	Body            string            `json:"body,omitempty"`
 	FollowRedirects bool              `json:"follow_redirects,omitempty"`
 	InsecureTLS     bool              `json:"insecure_tls,omitempty"`
-	ExpectStatus    int               `json:"expect_status,omitempty"`  // 0 = any status below 400
-	ExpectKeyword   string            `json:"expect_keyword,omitempty"` // body must contain
-	ExpectMaxMs     int               `json:"expect_max_ms,omitempty"`  // total time must be below
-	SpeedTest       bool              `json:"speed_test,omitempty"`     // keep downloading to measure throughput
-	SpeedSeconds    int               `json:"speed_seconds,omitempty"`  // download window, default 5
+	// HTTP3 sends the requests over HTTP/3 (QUIC) instead of HTTP/1.1 or
+	// HTTP/2. https only. Needs the agent capability CapHTTP3.
+	HTTP3         bool   `json:"http3,omitempty"`
+	ExpectStatus  int    `json:"expect_status,omitempty"`  // 0 = any status below 400
+	ExpectKeyword string `json:"expect_keyword,omitempty"` // body must contain
+	ExpectMaxMs   int    `json:"expect_max_ms,omitempty"`  // total time must be below
+	SpeedTest     bool   `json:"speed_test,omitempty"`     // keep downloading to measure throughput
+	SpeedSeconds  int    `json:"speed_seconds,omitempty"`  // download window, default 5
 
 	// mtr
 	MaxHops  int    `json:"max_hops,omitempty"`
