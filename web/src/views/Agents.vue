@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
+import { LINES, PROVINCES, COUNTRIES, placeLabel } from '../geo.js'
 import Onboarding from '../components/Onboarding.vue'
 
 const props = defineProps({
@@ -44,6 +45,32 @@ async function showInstall(a) {
   await nextTick()
   onboarding.value?.$el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+// --- correcting a node's place and line ---
+// The server works them out from the public IP and the labels given when the
+// node was created; this is for when both are wrong (a NAS behind a tunnel, an
+// IP the database files under the wrong city).
+const geoEdit = ref(null) // { id, name, cc, province, city, line, saving }
+const geoError = ref('')
+function editGeo(a) {
+  const o = a.geo_override || {}
+  geoEdit.value = { id: a.id, name: a.name, auto: a.geo, cc: o.cc || '', province: o.province || '', city: o.city || '', line: o.line || '', saving: false }
+  geoError.value = ''
+}
+const countryChoices = computed(() => {
+  const e = geoEdit.value
+  return e && e.cc && !COUNTRIES.some(([cc]) => cc === e.cc) ? [...COUNTRIES, [e.cc, e.cc]] : COUNTRIES
+})
+function onCountryChange() { geoEdit.value.province = ''; geoEdit.value.city = '' }
+async function saveGeo(clear = false) {
+  const e = geoEdit.value
+  e.saving = true
+  geoError.value = ''
+  try {
+    await api.patchAgent(e.id, { geo: clear ? null : { cc: e.cc, province: e.cc ? e.province : '', city: e.cc ? e.city : '', line: e.line } })
+    geoEdit.value = null
+    await load()
+  } catch (err) { geoError.value = err.message; e.saving = false }
+}
 const online = computed(() => agents.value.filter((a) => a.online).length)
 const legacyNodes = computed(() => agents.value.filter((a) => a.auth === 'legacy'))
 async function setLegacy(enabled) {
@@ -75,6 +102,32 @@ onBeforeUnmount(() => clearInterval(timer))
     </div>
     <p class="sub" v-if="props.admin && legacyToken === 'disabled'" style="margin:0 0 12px">旧版共享 token 已停用，只有节点自己的 token 能连接。
       <button class="btn link sm" type="button" @click="setLegacy(true)">重新启用</button></p>
+    <form class="card" v-if="geoEdit" @submit.prevent="saveGeo()">
+      <h3>修正节点地域与线路 <span class="sub">{{ geoEdit.name }}</span></h3>
+      <p class="sub" style="margin-top:0">地域和线路默认由公网 IP 归属地、以及接入时填写的位置 / 运营商得出{{ geoEdit.auto ? `（当前：${placeLabel(geoEdit.auto) || '未识别'}${geoEdit.auto.line ? ' · ' + geoEdit.auto.line : ''}）` : '（当前未识别）' }}。只填需要改的项，留空的继续自动识别；改地域时必须选国家或地区。</p>
+      <div class="row top" style="gap:16px">
+        <div class="field"><label>国家或地区</label>
+          <select v-model="geoEdit.cc" @change="onCountryChange">
+            <option value="">自动识别</option>
+            <option v-for="[cc, name] in countryChoices" :key="cc" :value="cc">{{ name }}</option>
+          </select>
+        </div>
+        <div class="field" v-if="geoEdit.cc === 'CN'"><label>省份</label>
+          <select v-model="geoEdit.province"><option value="">未指定</option><option v-for="p in PROVINCES" :key="p">{{ p }}</option></select>
+        </div>
+        <div class="field" v-else-if="geoEdit.cc"><label>省 / 州</label><input type="text" v-model="geoEdit.province" maxlength="40" /></div>
+        <div class="field" v-if="geoEdit.cc"><label>城市</label><input type="text" v-model="geoEdit.city" maxlength="40" placeholder="可留空" /></div>
+        <div class="field"><label>线路</label>
+          <select v-model="geoEdit.line"><option value="">自动识别</option><option v-for="l in LINES" :key="l">{{ l }}</option></select>
+        </div>
+      </div>
+      <div class="error-box" v-if="geoError" style="margin:12px 0 0">{{ geoError }}</div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn" type="submit" :disabled="geoEdit.saving">保存</button>
+        <button class="btn" type="button" :disabled="geoEdit.saving" @click="saveGeo(true)">恢复自动识别</button>
+        <button class="btn link" type="button" @click="geoEdit = null">取消</button>
+      </div>
+    </form>
     <div class="card">
       <h3>节点列表 <span class="sub">{{ online }} 在线 / {{ agents.length }} 总数</span></h3>
       <div class="table-wrap" v-if="!props.admin">
@@ -98,7 +151,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <table class="grid">
           <thead>
             <tr>
-              <th></th><th>名称</th><th>位置</th><th>运营商</th><th>公网 IP</th><th>系统</th><th>版本</th><th>能力</th><th class="num">运行中</th><th>最后在线</th><th></th>
+              <th></th><th>名称</th><th>位置</th><th>运营商</th><th title="节点筛选、结果分组和地图用的地域与线路：由公网 IP 归属地和上面两列的填写内容得出，可手动修正">地域 / 线路</th><th>公网 IP</th><th>系统</th><th>版本</th><th>能力</th><th class="num">运行中</th><th>最后在线</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -113,6 +166,12 @@ onBeforeUnmount(() => clearInterval(timer))
               </td>
               <td>{{ a.location || a.geo_location || '-' }}<div class="sub" v-if="a.location && a.geo_location && a.location !== a.geo_location">{{ a.geo_location }}</div></td>
               <td>{{ a.isp || a.geo_isp || '-' }}<div class="sub" v-if="a.isp && a.geo_isp && a.isp !== a.geo_isp">{{ a.geo_isp }}</div></td>
+              <td style="white-space:nowrap">
+                <template v-if="a.geo">{{ placeLabel(a.geo) || '未识别' }} <span class="badge" v-if="a.geo.line">{{ a.geo.line }}</span>
+                  <span class="sub" v-if="a.geo.src === 'manual'" title="已由管理员手动修正"> 手动</span></template>
+                <span v-else class="warn">未识别</span>
+                <button class="btn link sm" type="button" @click="editGeo(a)">修正</button>
+              </td>
               <td class="mono">{{ a.public_ip || '-' }}</td>
               <td class="sub">{{ a.os ? `${a.os}/${a.arch}` : '-' }}</td>
               <td class="sub">{{ a.version }} <span v-if="outdated(a)" class="badge warn" title="与服务端版本不一致，节点重连后会自动更新">待更新</span></td>
@@ -127,7 +186,7 @@ onBeforeUnmount(() => clearInterval(timer))
                 <button class="btn sm danger" @click="remove(a)" style="margin-left:6px">删除</button>
               </td>
             </tr>
-            <tr v-if="!agents.length"><td colspan="11" class="empty">暂无节点</td></tr>
+            <tr v-if="!agents.length"><td colspan="12" class="empty">暂无节点</td></tr>
           </tbody>
         </table>
       </div>

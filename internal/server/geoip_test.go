@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net"
 	"os"
 	"testing"
 
@@ -31,9 +32,20 @@ func TestGeoIPOffline(t *testing.T) {
 		t.Fatalf("annotate: %+v", hops)
 	}
 	t.Logf("223.5.5.5 -> %q", hops[1].Geo[0])
-	loc, isp := g.LookupAgent("223.5.5.5")
-	t.Logf("agent lookup -> loc=%q isp=%q", loc, isp)
+	loc, isp, geo := g.LookupAgent("223.5.5.5")
+	t.Logf("agent lookup -> loc=%q isp=%q geo=%+v", loc, isp, geo)
 	if loc == "" {
 		t.Fatal("agent lookup via offline db failed")
+	}
+	if geo.CC != "CN" || geo.Province == "" {
+		t.Fatalf("structured lookup of a Chinese IP: %+v", geo)
+	}
+	// A few well-known addresses, to see what the database really returns.
+	for _, ip := range []string{"8.8.8.8", "1.1.1.1", "119.29.29.29", "202.12.27.33", "168.95.1.1", "202.14.67.4"} {
+		_, _, geo := g.LookupAgent(ip)
+		t.Logf("%s -> %+v (raw %q)", ip, geo, g.offlineRaw(net.ParseIP(ip)))
+	}
+	if _, _, geo := g.LookupAgent("192.168.1.1"); geo != (protocol.Geo{}) {
+		t.Fatalf("private address must have no place: %+v", geo)
 	}
 }

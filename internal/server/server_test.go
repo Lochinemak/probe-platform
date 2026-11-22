@@ -251,10 +251,16 @@ func TestAPIAuthGate(t *testing.T) {
 }
 
 func TestPublicAgentTrimsDetails(t *testing.T) {
-	ag := &protocol.AgentStatus{ID: "a", Name: "home", Online: true, PublicIP: "1.2.3.4", OS: "linux", Arch: "amd64", Version: "v1", GeoLocation: "中国 广东", GeoISP: "电信", Capabilities: []string{"mtr"}}
+	ag := &protocol.AgentStatus{ID: "a", Name: "home", Online: true, PublicIP: "1.2.3.4", OS: "linux", Arch: "amd64", Version: "v1", GeoLocation: "中国 广东", GeoISP: "电信", Capabilities: []string{"mtr"},
+		GeoOverride: &protocol.Geo{Line: "IDC"}}
+	ag.Geo = agentGeo(ag)
 	p := publicAgent(ag)
 	if p.PublicIP != "" || p.OS != "" || p.Version != "" || p.Location != "中国 广东" || p.ISP != "电信" || len(p.Capabilities) != 1 {
 		t.Fatalf("trimmed: %+v", p)
+	}
+	// Guests get the place and line the filters need, not how they were arrived at.
+	if p.Geo == nil || p.Geo.Province != "广东" || p.Geo.Line != "IDC" || p.GeoOverride != nil || p.GeoIP != nil {
+		t.Fatalf("guest geo: %+v override %+v", p.Geo, p.GeoOverride)
 	}
 	gp := guestParams(protocol.TaskHTTP, protocol.Params{Count: 20, SpeedTest: true})
 	if gp.Count != 3 || gp.SpeedTest {

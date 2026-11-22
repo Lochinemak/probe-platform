@@ -39,6 +39,7 @@ type GeoIP struct {
 
 type geoEntry struct {
 	loc, isp string
+	geo      protocol.Geo
 	at       time.Time
 }
 
@@ -227,19 +228,21 @@ func (g *GeoIP) AnnotateHops(hops []protocol.MTRHop) {
 	}
 }
 
-// LookupAgent resolves an agent's public IP to (location, isp).
-func (g *GeoIP) LookupAgent(ipStr string) (loc, isp string) {
+// LookupAgent resolves an agent's public IP to display labels (location, isp)
+// and to the structured place and line behind them. geo is zero for an address
+// nothing is known about, including private ones.
+func (g *GeoIP) LookupAgent(ipStr string) (loc, isp string, geo protocol.Geo) {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		return "", ""
+		return "", "", geo
 	}
 	if isPrivateIP(ip) {
-		return "内网", ""
+		return "内网", "", geo
 	}
 	g.mu.Lock()
 	if e, ok := g.agents[ipStr]; ok && time.Since(e.at) < g.agentTTL {
 		g.mu.Unlock()
-		return e.loc, e.isp
+		return e.loc, e.isp, e.geo
 	}
 	g.mu.Unlock()
 
@@ -249,32 +252,33 @@ func (g *GeoIP) LookupAgent(ipStr string) (loc, isp string) {
 	// With a local database most addresses never need the network call.
 	if raw := g.offlineRaw(ip); raw != "" {
 		loc, isp = splitRegion(raw)
+		geo = parseRegion(raw)
 	}
 	if loc == "" && g.online {
-		loc, isp = g.lookupIPAPI(ipStr)
+		loc, isp, geo = g.lookupIPAPI(ipStr)
 	}
 	if loc != "" || isp != "" {
 		g.mu.Lock()
-		g.agents[ipStr] = geoEntry{loc: loc, isp: isp, at: time.Now()}
+		g.agents[ipStr] = geoEntry{loc: loc, isp: isp, geo: geo, at: time.Now()}
 		g.mu.Unlock()
 	}
-	return loc, isp
+	return loc, isp, geo
 }
 
-func (g *GeoIP) lookupIPAPI(ip string) (loc, isp string) {
-	u := fmt.Sprintf("http://ip-api.com/json/%s?lang=zh-CN&fields=status,message,country,regionName,city,isp,org,as", url.PathEscape(ip))
+func (g *GeoIP) lookupIPAPI(ip string) (loc, isp string, geo protocol.Geo) {
+	u := fmt.Sprintf("http://ip-api.com/json/%s?lang=zh-CN&fields=status,message,country,countryCode,regionName,city,isp,org,as", url.PathEscape(ip))
 	resp, err := g.http.Get(u)
 	if err != nil {
 		g.log.Debug("ip-api lookup failed", "ip", ip, "err", err)
-		return "", ""
+		return "", "", geo
 	}
 	defer resp.Body.Close()
 	var body struct {
-		Status, Message, Country, RegionName, City, ISP, Org, AS string
+		Status, Message, Country, CountryCode, RegionName, City, ISP, Org, AS string
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Status != "success" {
 		g.log.Debug("ip-api lookup rejected", "ip", ip, "status", body.Status, "msg", body.Message)
-		return "", ""
+		return "", "", geo
 	}
 	var parts []string
 	prev := ""
@@ -290,7 +294,11 @@ func (g *GeoIP) lookupIPAPI(ip string) (loc, isp string) {
 	if isp == "" {
 		isp = normalizeISP(body.Org)
 	}
-	return loc, isp
+	geo = newGeo(body.CountryCode, body.Country, body.RegionName, body.City)
+	// The raw names decide the line: normalizeISP's "telecom" → 电信 shortcut
+	// is wrong outside China, and lineOf knows which country this is.
+	geo.Line = lineOf(firstNonEmpty(body.ISP, body.Org), geo.CC)
+	return loc, isp, geo
 }
 
 var ispAliases = []struct{ match, label string }{

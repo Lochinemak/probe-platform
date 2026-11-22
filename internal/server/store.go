@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS agents (
 	public_ip     TEXT NOT NULL DEFAULT '',
 	geo_location  TEXT NOT NULL DEFAULT '',
 	geo_isp       TEXT NOT NULL DEFAULT '',
+	geo           TEXT NOT NULL DEFAULT '',
+	geo_override  TEXT NOT NULL DEFAULT '',
 	capabilities  TEXT NOT NULL DEFAULT '[]',
 	first_seen    INTEGER NOT NULL,
 	last_seen     INTEGER NOT NULL,
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS results (
 	agent_name  TEXT NOT NULL DEFAULT '',
 	location    TEXT NOT NULL DEFAULT '',
 	isp         TEXT NOT NULL DEFAULT '',
+	geo         TEXT NOT NULL DEFAULT '',
 	status      TEXT NOT NULL,
 	error       TEXT NOT NULL DEFAULT '',
 	duration_ms REAL NOT NULL DEFAULT 0,
@@ -112,6 +115,14 @@ func (s *Store) migrate() error {
 	}
 	if added {
 		if _, err := s.db.Exec(`UPDATE agents SET auth='legacy'`); err != nil {
+			return err
+		}
+	}
+	// Structured geography (protocol.Geo as JSON, '' when unknown): what the
+	// IP lookup said, the administrator's correction, and a result's copy of
+	// its node's place when the task ran.
+	for _, c := range [][2]string{{"agents", "geo"}, {"agents", "geo_override"}, {"results", "geo"}} {
+		if _, err := s.ensureColumn(c[0], c[1], `TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -295,10 +306,43 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// SetAgentGeo stores the location looked up from a node's public IP.
-func (s *Store) SetAgentGeo(id, location, isp string) error {
-	_, err := s.db.Exec(`UPDATE agents SET geo_location=?, geo_isp=? WHERE id=?`, location, isp, id)
+// SetAgentGeo stores what was looked up from a node's public IP: the display
+// labels and the structured place.
+func (s *Store) SetAgentGeo(id, location, isp string, geo protocol.Geo) error {
+	_, err := s.db.Exec(`UPDATE agents SET geo_location=?, geo_isp=?, geo=? WHERE id=?`, location, isp, geoStr(&geo), id)
 	return err
+}
+
+// SetAgentGeoOverride stores (or with nil clears) an administrator's
+// correction of a node's place and line. ErrNotFound if the node is gone.
+func (s *Store) SetAgentGeoOverride(id string, o *protocol.Geo) error {
+	res, err := s.db.Exec(`UPDATE agents SET geo_override=? WHERE id=?`, geoStr(o), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// geoStr encodes a Geo for a column: ” for nil or empty.
+func geoStr(g *protocol.Geo) string {
+	if g == nil || *g == (protocol.Geo{}) {
+		return ""
+	}
+	return jsonStr(g)
+}
+
+func parseGeo(s string) *protocol.Geo {
+	if s == "" {
+		return nil
+	}
+	var g protocol.Geo
+	if json.Unmarshal([]byte(s), &g) != nil || g == (protocol.Geo{}) {
+		return nil
+	}
+	return &g
 }
 
 // TouchAgent updates last_seen.
@@ -307,16 +351,17 @@ func (s *Store) TouchAgent(id string, t time.Time) error {
 	return err
 }
 
-const agentCols = `id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen,auth`
+const agentCols = `id,name,location,isp,tags,os,arch,version,public_ip,geo_location,geo_isp,capabilities,first_seen,last_seen,auth,geo,geo_override`
 
 func scanAgent(row interface{ Scan(...any) error }) (*protocol.AgentStatus, error) {
 	var a protocol.AgentStatus
-	var tags, caps string
+	var tags, caps, geo, override string
 	var first, last int64
 	if err := row.Scan(&a.ID, &a.Name, &a.Location, &a.ISP, &tags, &a.OS, &a.Arch, &a.Version, &a.PublicIP,
-		&a.GeoLocation, &a.GeoISP, &caps, &first, &last, &a.Auth); err != nil {
+		&a.GeoLocation, &a.GeoISP, &caps, &first, &last, &a.Auth, &geo, &override); err != nil {
 		return nil, err
 	}
+	a.GeoIP, a.GeoOverride = parseGeo(geo), parseGeo(override)
 	_ = json.Unmarshal([]byte(tags), &a.Tags)
 	_ = json.Unmarshal([]byte(caps), &a.Capabilities)
 	a.FirstSeen, a.LastSeen = fromMs(first), fromMs(last)
@@ -483,18 +528,18 @@ func (s *Store) UpsertResult(r *protocol.AgentResult) error {
 		finished = unixMs(*r.FinishedAt)
 	}
 	_, err := s.db.Exec(`
-INSERT INTO results (task_id,agent_id,agent_name,location,isp,status,error,duration_ms,data,started_at,finished_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO results (task_id,agent_id,agent_name,location,isp,geo,status,error,duration_ms,data,started_at,finished_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(task_id,agent_id) DO UPDATE SET
 	status=excluded.status, error=excluded.error, duration_ms=excluded.duration_ms, data=excluded.data,
 	started_at=COALESCE(excluded.started_at, results.started_at), finished_at=excluded.finished_at`,
-		r.TaskID, r.AgentID, r.AgentName, r.Location, r.ISP, string(r.Status), r.Error, r.DurationMs, data, started, finished)
+		r.TaskID, r.AgentID, r.AgentName, r.Location, r.ISP, geoStr(r.Geo), string(r.Status), r.Error, r.DurationMs, data, started, finished)
 	return err
 }
 
 // ListResults returns every stored result for a task.
 func (s *Store) ListResults(taskID string) ([]*protocol.AgentResult, error) {
-	rows, err := s.db.Query(`SELECT task_id,agent_id,agent_name,location,isp,status,error,duration_ms,data,started_at,finished_at
+	rows, err := s.db.Query(`SELECT task_id,agent_id,agent_name,location,isp,geo,status,error,duration_ms,data,started_at,finished_at
 		FROM results WHERE task_id=? ORDER BY agent_name`, taskID)
 	if err != nil {
 		return nil, err
@@ -503,11 +548,15 @@ func (s *Store) ListResults(taskID string) ([]*protocol.AgentResult, error) {
 	out := []*protocol.AgentResult{}
 	for rows.Next() {
 		var r protocol.AgentResult
-		var status string
+		var status, geo string
 		var data sql.NullString
 		var started, finished sql.NullInt64
-		if err := rows.Scan(&r.TaskID, &r.AgentID, &r.AgentName, &r.Location, &r.ISP, &status, &r.Error, &r.DurationMs, &data, &started, &finished); err != nil {
+		if err := rows.Scan(&r.TaskID, &r.AgentID, &r.AgentName, &r.Location, &r.ISP, &geo, &status, &r.Error, &r.DurationMs, &data, &started, &finished); err != nil {
 			return nil, err
+		}
+		// Rows from before results recorded it: read it off the display text.
+		if r.Geo = parseGeo(geo); r.Geo == nil {
+			r.Geo = labelGeo(r.Location, r.ISP)
 		}
 		r.Status = protocol.ResultStatus(status)
 		if data.Valid && data.String != "" {

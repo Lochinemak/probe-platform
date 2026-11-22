@@ -443,20 +443,41 @@ type DNSResult struct {
 // Dashboard-facing types
 // ---------------------------------------------------------------------------
 
+// Geo is where a node is and what kind of line it is on, in the fixed
+// vocabulary the dashboard filters and maps by.
+type Geo struct {
+	CC       string `json:"cc,omitempty"`       // ISO 3166-1 alpha-2; Hong Kong, Macau and Taiwan are CN with a Province
+	Country  string `json:"country,omitempty"`  // Chinese name
+	Province string `json:"province,omitempty"` // short name for China ("广东", "内蒙古", "香港"); free text elsewhere
+	City     string `json:"city,omitempty"`
+	Line     string `json:"line,omitempty"` // 电信 | 联通 | 移动 | 广电 | 教育网 | IDC | 云厂商 | 其他
+	// Src says where the values came from: "geoip" (public IP lookup),
+	// "label" (the operator's location / ISP text) or "manual" (corrected by
+	// an administrator).
+	Src string `json:"src,omitempty"`
+}
+
 // AgentStatus is what the dashboard sees for one agent.
 type AgentStatus struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Online       bool     `json:"online"`
-	Location     string   `json:"location,omitempty"`
-	ISP          string   `json:"isp,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	OS           string   `json:"os,omitempty"`
-	Arch         string   `json:"arch,omitempty"`
-	Version      string   `json:"version,omitempty"`
-	PublicIP     string   `json:"public_ip,omitempty"`
-	GeoLocation  string   `json:"geo_location,omitempty"` // auto-detected from PublicIP
-	GeoISP       string   `json:"geo_isp,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Online      bool     `json:"online"`
+	Location    string   `json:"location,omitempty"`
+	ISP         string   `json:"isp,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	OS          string   `json:"os,omitempty"`
+	Arch        string   `json:"arch,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	PublicIP    string   `json:"public_ip,omitempty"`
+	GeoLocation string   `json:"geo_location,omitempty"` // auto-detected from PublicIP
+	GeoISP      string   `json:"geo_isp,omitempty"`
+	// Geo is the node's place and line after weighing every source (see
+	// agentGeo in the server). GeoOverride is the administrator's correction,
+	// sent so the edit form can show it. GeoIP is the raw lookup result for
+	// PublicIP and never leaves the server.
+	Geo          *Geo     `json:"geo,omitempty"`
+	GeoOverride  *Geo     `json:"geo_override,omitempty"`
+	GeoIP        *Geo     `json:"-"`
 	Capabilities []string `json:"capabilities,omitempty"`
 	// Auth is how the node last authenticated: "token" (its own node token),
 	// "legacy" (the old shared token, not migrated yet) or "" (created on the
@@ -489,6 +510,7 @@ type AgentResult struct {
 	AgentName  string          `json:"agent_name"`
 	Location   string          `json:"location,omitempty"`
 	ISP        string          `json:"isp,omitempty"`
+	Geo        *Geo            `json:"geo,omitempty"` // the node's place and line when the task ran
 	Status     ResultStatus    `json:"status"`
 	Error      string          `json:"error,omitempty"`
 	DurationMs float64         `json:"duration_ms,omitempty"`

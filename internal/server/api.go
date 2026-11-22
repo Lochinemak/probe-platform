@@ -53,7 +53,9 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	// Guests (when enabled) may probe and read results; node details are trimmed.
 	mux.Handle("GET /api/agents", a.protectGuest(a.listAgents))
 	mux.Handle("POST /api/agents", a.protect(a.createAgent))
+	mux.Handle("PATCH /api/agents/{id}", a.protect(a.patchAgent))
 	mux.Handle("DELETE /api/agents/{id}", a.protect(a.deleteAgent))
+	mux.Handle("GET /api/stats", a.protectGuest(a.stats))
 	mux.Handle("GET /api/agents/{id}/token", a.protect(a.agentToken))
 	mux.Handle("POST /api/agents/{id}/token", a.protect(a.resetAgentToken))
 	mux.Handle("GET /api/tasks", a.protectGuest(a.listTasks))
@@ -265,7 +267,9 @@ func publicAgent(ag *protocol.AgentStatus) *protocol.AgentStatus {
 	if isp == "" {
 		isp = ag.GeoISP
 	}
-	return &protocol.AgentStatus{ID: ag.ID, Name: ag.Name, Online: ag.Online, Location: loc, ISP: isp, Capabilities: ag.Capabilities, Running: ag.Running}
+	// Geo is province / city / line: what the node filters and maps need, and
+	// no more precise than the location label a guest already sees.
+	return &protocol.AgentStatus{ID: ag.ID, Name: ag.Name, Online: ag.Online, Location: loc, ISP: isp, Geo: ag.Geo, Capabilities: ag.Capabilities, Running: ag.Running}
 }
 
 // protectAgentOrSession allows either a logged-in dashboard user or an agent
@@ -619,6 +623,88 @@ func (a *API) listAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	// legacy_token: "none" | "enabled" | "disabled", for the migration notice.
 	writeJSON(w, http.StatusOK, map[string]any{"agents": agents, "legacy_token": a.settings.LegacyTokenState()})
+}
+
+// patchAgent edits what an administrator may change on a node after it was
+// created: for now the correction of its place and line. {"geo": null} or an
+// empty object clears the correction.
+func (a *API) patchAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Geo *protocol.Geo `json:"geo"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	override, err := cleanGeoOverride(body.Geo)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id := r.PathValue("id")
+	if err := a.hub.SetAgentGeoOverride(id, override); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "节点不存在")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	invalidateStats()
+	for _, ag := range a.hub.Agents() {
+		if ag.ID == id {
+			writeJSON(w, http.StatusOK, map[string]any{"agent": ag})
+			return
+		}
+	}
+	writeErr(w, http.StatusNotFound, "节点不存在")
+}
+
+// cleanGeoOverride validates an administrator's correction and puts it in the
+// stored vocabulary. nil means "no correction".
+func cleanGeoOverride(in *protocol.Geo) (*protocol.Geo, error) {
+	if in == nil {
+		return nil, nil
+	}
+	trim := func(s string) string { return strings.TrimSpace(s) }
+	cc, province, city, line := strings.ToUpper(trim(in.CC)), trim(in.Province), trim(in.City), trim(in.Line)
+	for _, v := range []string{province, city, trim(in.Country)} {
+		if len([]rune(v)) > 40 {
+			return nil, errors.New("地域名称过长")
+		}
+	}
+	if line != "" && !validLine(line) {
+		return nil, errors.New("线路必须是：" + strings.Join(lineNames, "、"))
+	}
+	var out protocol.Geo
+	switch {
+	case cc == "":
+		if province != "" || city != "" {
+			return nil, errors.New("填写省份或城市时必须先选国家或地区")
+		}
+	case !isCountryCode(cc):
+		return nil, errors.New("国家或地区代码必须是两位字母，例如 CN、JP、US")
+	case cc == "CN" || regionCodes[cc] != "":
+		if p := regionCodes[cc]; p != "" {
+			province = p
+		}
+		if province != "" {
+			if _, ok := findProvince(province); !ok {
+				return nil, errors.New("不认识的省份：" + province)
+			}
+		}
+		out = chinaGeo(province, city)
+	default:
+		out = newGeo(cc, trim(in.Country), province, city)
+		if out.Country == "" {
+			out.Country = cc
+		}
+	}
+	out.Line = line
+	if out == (protocol.Geo{}) {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 func (a *API) deleteAgent(w http.ResponseWriter, r *http.Request) {

@@ -310,6 +310,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 			OS: hello.OS, Arch: hello.Arch, Version: hello.Version, PublicIP: remoteIP,
 			Capabilities: hello.Capabilities, LastSeen: now,
 			FirstSeen: node.FirstSeen, GeoLocation: node.GeoLocation, GeoISP: node.GeoISP,
+			GeoIP: node.GeoIP, GeoOverride: node.GeoOverride,
 			Auth: "token",
 		},
 	}
@@ -421,15 +422,19 @@ func (h *Hub) offerUpdate(ac *agentConn, hello protocol.Hello) {
 }
 
 func (h *Hub) lookupAgentGeo(ac *agentConn, ip string) {
-	loc, isp := h.geo.LookupAgent(ip)
+	loc, isp, geo := h.geo.LookupAgent(ip)
 	if loc == "" && isp == "" {
 		return
 	}
 	ac.mu.Lock()
 	ac.status.GeoLocation, ac.status.GeoISP = loc, isp
+	ac.status.GeoIP = nil
+	if geo != (protocol.Geo{}) {
+		ac.status.GeoIP = &geo
+	}
 	ac.mu.Unlock()
 	// An update, not an upsert: the node may have been deleted meanwhile.
-	if err := h.store.SetAgentGeo(ac.id, loc, isp); err != nil {
+	if err := h.store.SetAgentGeo(ac.id, loc, isp, geo); err != nil {
 		h.log.Error("store agent geo", "err", err)
 	}
 }
@@ -518,7 +523,7 @@ func (h *Hub) Agents() []*protocol.AgentStatus {
 		if prev, ok := byID[id]; ok {
 			s.FirstSeen = prev.FirstSeen
 			if s.GeoLocation == "" {
-				s.GeoLocation, s.GeoISP = prev.GeoLocation, prev.GeoISP
+				s.GeoLocation, s.GeoISP, s.GeoIP = prev.GeoLocation, prev.GeoISP, prev.GeoIP
 			}
 		}
 		byID[id] = &s
@@ -526,6 +531,7 @@ func (h *Hub) Agents() []*protocol.AgentStatus {
 	h.mu.RUnlock()
 	out := make([]*protocol.AgentStatus, 0, len(byID))
 	for _, a := range byID {
+		a.Geo = agentGeo(a)
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -535,6 +541,23 @@ func (h *Hub) Agents() []*protocol.AgentStatus {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// SetAgentGeoOverride records an administrator's correction of a node's place
+// and line (nil clears it) and applies it to the live connection.
+func (h *Hub) SetAgentGeoOverride(id string, o *protocol.Geo) error {
+	if err := h.store.SetAgentGeoOverride(id, o); err != nil {
+		return err
+	}
+	h.mu.RLock()
+	ac := h.agents[id]
+	h.mu.RUnlock()
+	if ac != nil {
+		ac.mu.Lock()
+		ac.status.GeoOverride = o
+		ac.mu.Unlock()
+	}
+	return nil
 }
 
 // RemoveAgent deletes a node, which also revokes its token; a connected
@@ -698,8 +721,10 @@ func (h *Hub) createTask(typ protocol.TaskType, target string, params protocol.P
 			if res.ISP == "" {
 				res.ISP = st.GeoISP
 			}
+			res.Geo = agentGeo(&st)
 		} else if st, err := h.store.GetAgent(id); err == nil {
 			res.AgentName, res.Location, res.ISP = st.Name, st.Location, st.ISP
+			res.Geo = agentGeo(st)
 		} else {
 			res.AgentName = id
 		}

@@ -24,6 +24,8 @@ export const api = {
   agents: () => request('GET', '/api/agents'),
   createAgent: (body) => request('POST', '/api/agents', body),
   deleteAgent: (id) => request('DELETE', `/api/agents/${encodeURIComponent(id)}`),
+  patchAgent: (id, body) => request('PATCH', `/api/agents/${encodeURIComponent(id)}`, body),
+  stats: () => request('GET', '/api/stats'),
   agentToken: (id) => request('GET', `/api/agents/${encodeURIComponent(id)}/token`),
   resetAgentToken: (id) => request('POST', `/api/agents/${encodeURIComponent(id)}/token`),
   tasks: (limit = 50, offset = 0, monitor = '') => request('GET', `/api/tasks?limit=${limit}&offset=${offset}&monitor=${encodeURIComponent(monitor)}`),

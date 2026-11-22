@@ -7,6 +7,8 @@ import { TYPE_INFO, validateTarget } from '../validate.js'
 import * as recentStore from '../recent.js'
 import TaskResults from '../components/TaskResults.vue'
 import TargetInput from '../components/TargetInput.vue'
+import NodePicker from '../components/NodePicker.vue'
+import StatCards from '../components/StatCards.vue'
 
 const props = defineProps({ role: { type: String, default: 'admin' } })
 const isAdmin = computed(() => props.role === 'admin')
@@ -68,45 +70,16 @@ function setScheme(s) {
   if (/^https?:\/\//i.test(target.value.trim())) target.value = target.value.trim().replace(/^https?/i, s)
 }
 
-// --- agents ---
+// --- agents: NodePicker decides which of them a probe runs on ---
 const agents = ref([])
 const selected = ref(new Set())
-const onlineAgents = computed(() => agents.value.filter((a) => a.online))
 let agentTimer = null
-let userTouched = false
 async function loadAgents() {
   try {
     const { agents: list } = await api.agents()
     agents.value = list.filter((a) => a.online || a.auth !== '') // skip nodes created but never connected
-    const online = new Set(list.filter((a) => a.online).map((a) => a.id))
-    if (!userTouched) {
-      selected.value = online
-    } else {
-      const s = new Set([...selected.value].filter((id) => online.has(id)))
-      selected.value = s
-    }
   } catch (e) { if (e.status !== 401) error.value = '获取节点失败：' + e.message }
 }
-function toggleAgent(a) {
-  if (!a.online) return
-  userTouched = true
-  const s = new Set(selected.value)
-  if (s.has(a.id)) s.delete(a.id); else s.add(a.id)
-  selected.value = s
-}
-function selectAll(on) {
-  userTouched = !on
-  selected.value = on ? new Set(onlineAgents.value.map((a) => a.id)) : new Set()
-}
-const groups = computed(() => {
-  const m = new Map()
-  for (const a of agents.value) {
-    const k = a.isp || a.geo_isp || '未分类'
-    if (!m.has(k)) m.set(k, [])
-    m.get(k).push(a)
-  }
-  return [...m.entries()]
-})
 
 // --- task lifecycle ---
 const task = ref(null)
@@ -165,7 +138,7 @@ async function run(mode = 'once') {
   error.value = ''
   const v = validateTarget(type.value, target.value, { scheme: scheme.value })
   if (!v.ok) { targetError.value = v.error; targetBox.value?.focus(); return }
-  if (selected.value.size === 0) { error.value = '请至少选择一个在线节点'; return }
+  if (selected.value.size === 0) { error.value = '当前范围内没有可用的在线节点，请调整节点范围'; return }
   closeStream()
   const p = buildParams(mode === 'continuous' && hasContinuous.value)
   running.value = true
@@ -291,6 +264,8 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream() })
 
 <template>
   <div>
+    <StatCards v-if="!task" />
+
     <div class="notice" v-if="lastTask && !task">
       <span>上次检测：<span class="badge" :class="lastTask.type">{{ TYPE_INFO[lastTask.type]?.label || lastTask.type }}</span> <span class="mono">{{ lastTask.target }}</span> <span class="sub" :title="fmtTime(lastTask.at)">{{ timeAgo(lastTask.at) }}</span></span>
       <span class="spacer"></span>
@@ -401,25 +376,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream() })
       </div>
     </div>
 
-    <div class="card">
-      <div class="row" style="margin-bottom:10px">
-        <h3 style="margin:0">节点 <span class="sub">已选 {{ selected.size }} / 在线 {{ onlineAgents.length }}</span></h3>
-        <span class="spacer"></span>
-        <button class="btn sm" type="button" @click="selectAll(true)">全选</button>
-        <button class="btn sm" type="button" @click="selectAll(false)">清空</button>
-      </div>
-      <div v-if="!agents.length" class="sub">还没有节点接入。到「节点」页查看接入方法。</div>
-      <div v-for="[isp, list] in groups" :key="isp" class="row" style="margin-bottom:8px">
-        <span class="sub" style="min-width:56px">{{ isp }}</span>
-        <div class="agents-pick">
-          <span v-for="a in list" :key="a.id" class="chip" :class="{ on: selected.has(a.id), off: !a.online }" @click="toggleAgent(a)" :title="a.online ? '' : '离线'">
-            <span class="status-dot" :class="{ online: a.online }"></span>
-            {{ a.name }}
-            <span class="sub" v-if="a.location || a.geo_location">{{ a.location || a.geo_location }}</span>
-          </span>
-        </div>
-      </div>
-    </div>
+    <NodePicker v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" />
 
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
 
