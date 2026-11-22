@@ -229,12 +229,24 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 | --- | --- |
 | `/ping` `/tcping` `/http` `/dns` `/mtr` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
 | `/t/<任务 ID>` | 某一次检测的结果：进行中的实时更新，结束的从历史读取，表单同时回填成当时的参数。游客只能打开自己发起的 |
+| `/s/<分享码>` | 分享出去的检测结果：只读，不用登录就能打开（关闭了游客访问也一样），见下面「分享与截图」 |
 | `/coverage` | 节点覆盖：节点分布地图（有在线节点 / 全部离线 / 暂无节点）、点击地区看那里各线路的在线情况、地区排行、线路汇总 |
 | `/monitors` `/agents` `/history` `/notify` `/settings` | 监控、节点、历史、通知、设置（「历史」里的每一行都链接到 `/t/<任务 ID>`） |
 
 结果页自上而下是：汇总卡（最快 / 最慢 / 平均、成功率、超时数、进度）、延迟色阶图例、**响应 IP 汇总**（各节点拿到的地址、占比、来自哪些地区和线路，点一下只看拿到该地址的节点，可复制）、筛选条（线路、大区、仅看失败）和明细表。表头都可以点击排序（再点一次反向，第三次恢复原顺序）；持续检测多出「最新」和「95% 延迟」两列。右上角可以复制链接、导出（复制 Markdown 表格、下载 CSV / JSON，内容跟随当前的筛选和排序）、进入清爽模式（只留结果，Esc 退出）。响应 IP 的归属地来自离线 IP 库，没有装库时这一项留空。
 
 结果页的地图有「中国」（按省份）和「全球」（按国家或地区）两张，按节点所在地着色，颜色与表格同一套延迟色阶；点击某个地区只看那里的节点，再点一次取消。节点只有一两个时地图默认收起。地图数据随前端一起打包、按需加载，运行时不联网；来源与使用条款见 `web/src/maps/README.md`（中国地图：天地图省级行政区划，审图号 GS（2024）0650号，仅用于地图可视化；世界地图：Natural Earth 中国视角版本，公有领域）。
+
+**分享与截图。** 结果右上角的「分享」生成一个 `/s/<分享码>` 链接，任何拿到链接的人都能看这一次的结果，不需要登录；可以设 24 小时 / 7 天 / 30 天的有效期，随时撤销，同一个结果最多 5 个有效链接。链接里公开什么在创建时勾选，默认只公开测量数据和检测时间：
+
+| 开关 | 关闭时（默认除「检测时间」外都关闭） |
+| --- | --- |
+| 探测目标 | 目标地址、最终 URL、跳转链、证书主体、响应头、DNS 记录名都不出现，报错只留类别（如「连接超时」） |
+| 检测时间 | 不显示任务的发起与完成时间 |
+| 响应 IP | 解析到的地址、路由每一跳的地址与反解名、DNS 记录值、DNS 服务器都不出现，归属地标签保留 |
+| 节点名称与位置 | 节点显示为「节点 1、2…」，只保留所在省份和线路 |
+
+没勾选的内容是**服务器在生成分享数据时就去掉的**，不是页面上不显示；发起人、真实节点 ID、请求头和请求体任何情况下都不会进分享；即使公开目标，响应头也只保留 `Server`、`Content-Type` 等几个描述性字段（不含 `Set-Cookie`）。任务还在跑时可以选「跟随任务」（分享页实时更新，任务结束时冻结）或「当前快照」。冻结后的结果随分享单独保存，所以超过 `PROBE_RETAIN_DAYS` 被清理的任务，分享链接在自己到期前仍然能打开。「保存截图」把当前结果（沿用筛选、排序和地图状态）生成 PNG，可选简易 / 完整、是否带目标、时间、地图、响应 IP、节点名称，2× 或 3×，下载或直接复制到剪贴板；图片在浏览器本地生成，不上传到任何地方。
 
 目标输入框会按检测类型记住最近用过的目标（只存在浏览器本地）：聚焦展开，↑ / ↓ 选择，回车填入，Delete 删除选中的一条，Alt+Delete 清空当前类型。
 
@@ -282,6 +294,13 @@ curl -s "localhost:8080/api/monitors/<id>/series?range=24h'
 curl -s -X POST localhost:8080/api/tasks -d '{"type":"ping","target":"223.5.5.5","params":{"count":100,"interval_ms":1000,"continuous":true}}'
 # 实时结果（SSE：snapshot → progress* → result* → done）
 curl -N localhost:8080/api/tasks/<id>/events
+# 分享：创建（mode: follow | snapshot；expires: 24h | 7d | 30d；show_* 默认只有 show_time 为 true）、列出、撤销
+curl -s -X POST localhost:8080/api/tasks/<id>/shares -d '{"expires":"7d","show_target":true}'
+curl -s localhost:8080/api/tasks/<id>/shares
+curl -s -X DELETE localhost:8080/api/shares/<token>
+# 打开分享（无需登录）：结果，以及仍在运行时的事件流
+curl -s localhost:8080/api/shares/<token>
+curl -N localhost:8080/api/shares/<token>/events
 # 提前结束：stop 保留各节点已经测到的数据（结果状态为 done、error 为 "stopped"）；cancel 直接丢弃
 curl -s -X POST localhost:8080/api/tasks/<id>/stop
 curl -s -X POST localhost:8080/api/tasks/<id>/cancel

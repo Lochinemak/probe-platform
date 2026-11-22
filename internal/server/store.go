@@ -132,6 +132,9 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(monitorSchema); err != nil {
 		return fmt.Errorf("monitors: %w", err)
 	}
+	if _, err := s.db.Exec(shareSchema); err != nil {
+		return fmt.Errorf("shares: %w", err)
+	}
 	if err := s.pruneOrphanAgentRefs(); err != nil {
 		return err
 	}

@@ -42,6 +42,7 @@ type API struct {
 func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Settings, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
 	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(settings), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, settings: settings}
 	hub.SetLegacyToken(settings.LegacyAgentToken)
+	hub.AddTaskDoneHook(a.freezeShares)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/agent", hub.HandleAgentWS)
 	mux.HandleFunc("GET /api/health", a.health)
@@ -64,6 +65,13 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("GET /api/tasks/{id}/events", a.protectGuest(a.taskEvents))
 	mux.Handle("POST /api/tasks/{id}/cancel", a.protectGuest(a.cancelTask))
 	mux.Handle("POST /api/tasks/{id}/stop", a.protectGuest(a.stopTask))
+	// Share links. Creating and revoking follow the task's own access rules;
+	// opening one needs nothing but the token, also when guest access is off.
+	mux.Handle("POST /api/tasks/{id}/shares", a.protectGuest(a.createShare))
+	mux.Handle("GET /api/tasks/{id}/shares", a.protectGuest(a.listShares))
+	mux.Handle("DELETE /api/shares/{token}", a.protectGuest(a.revokeShare))
+	mux.HandleFunc("GET /api/shares/{token}", a.getShare)
+	mux.HandleFunc("GET /api/shares/{token}/events", a.shareEvents)
 	mux.Handle("GET /api/monitors", a.protect(a.listMonitors))
 	mux.Handle("POST /api/monitors", a.protect(a.createMonitor))
 	mux.Handle("GET /api/monitors/{id}", a.protect(a.getMonitor))
@@ -97,7 +105,8 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 // and a content policy for the dashboard itself (the built SPA loads one
 // external module script and no inline script).
 func (a *API) securityHeaders(next http.Handler) http.Handler {
-	const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+	// blob: is for the screenshot preview, an image the page itself rendered.
+	const csp = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
 		"connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

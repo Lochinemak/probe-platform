@@ -34,7 +34,7 @@ func NewScheduler(store *Store, hub *Hub, notifier *Notifier, baseURL func() str
 		baseURL = func() string { return "" }
 	}
 	s := &Scheduler{store: store, hub: hub, notifier: notifier, log: log, baseURL: baseURL, running: map[string]bool{}}
-	hub.SetTaskDoneHook(s.onTaskDone)
+	hub.AddTaskDoneHook(s.onTaskDone)
 	return s
 }
 

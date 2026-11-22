@@ -33,6 +33,10 @@ export const api = {
   createTask: (body) => request('POST', '/api/tasks', body),
   cancelTask: (id) => request('POST', `/api/tasks/${encodeURIComponent(id)}/cancel`),
   stopTask: (id) => request('POST', `/api/tasks/${encodeURIComponent(id)}/stop`),
+  shares: (taskId) => request('GET', `/api/tasks/${encodeURIComponent(taskId)}/shares`),
+  createShare: (taskId, body) => request('POST', `/api/tasks/${encodeURIComponent(taskId)}/shares`, body),
+  revokeShare: (token) => request('DELETE', `/api/shares/${encodeURIComponent(token)}`),
+  share: (token) => request('GET', `/api/shares/${encodeURIComponent(token)}`),
   agentFiles: () => request('GET', '/api/agent/version'),
   monitors: () => request('GET', '/api/monitors'),
   monitor: (id) => request('GET', `/api/monitors/${encodeURIComponent(id)}`),
@@ -56,7 +60,14 @@ export const api = {
 
 // subscribe opens the SSE stream for a task. Returns a function that closes it.
 export function subscribe(taskId, onEvent, onError) {
-  const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`)
+  return stream(`/api/tasks/${encodeURIComponent(taskId)}/events`, onEvent, onError)
+}
+// subscribeShare is the same stream for a shared result that is still running.
+export function subscribeShare(token, onEvent, onError) {
+  return stream(`/api/shares/${encodeURIComponent(token)}/events`, onEvent, onError)
+}
+function stream(url, onEvent, onError) {
+  const es = new EventSource(url)
   for (const type of ['snapshot', 'progress', 'result', 'done']) {
     es.addEventListener(type, (e) => {
       let data = {}

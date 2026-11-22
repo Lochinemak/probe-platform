@@ -35,10 +35,10 @@ function phaseWidths(t) {
       <thead>
         <tr>
           <th></th>
-          <SortTh :sort="sort" k="name">检测点</SortTh>
+          <SortTh :sort="sort" k="name" class="col-name">检测点</SortTh>
           <SortTh :sort="sort" k="place">地域</SortTh>
           <SortTh :sort="sort" k="line">线路</SortTh>
-          <SortTh :sort="sort" k="ip">响应 IP</SortTh>
+          <SortTh :sort="sort" k="ip" class="col-ip">响应 IP</SortTh>
           <SortTh :sort="sort" k="code">HTTP 状态</SortTh>
           <th>协议</th>
           <SortTh :sort="sort" k="dns" num>DNS</SortTh>
@@ -57,10 +57,10 @@ function phaseWidths(t) {
         <template v-for="r in rows" :key="r.agent_id">
           <tr class="clickable" @click="toggle(r.agent_id)">
             <td class="sub"><button type="button" class="th-btn" :aria-expanded="!!open[r.agent_id]" :aria-label="`${r.agent_name} 的请求详情与响应头`" @click.stop="toggle(r.agent_id)">{{ open[r.agent_id] ? '▾' : '▸' }}</button></td>
-            <td><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
+            <td class="col-name"><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
             <td class="sub">{{ r.place || '-' }}</td>
             <td><span class="badge" v-if="r.line">{{ r.line }}</span><span v-else class="sub">-</span></td>
-            <td class="mono">{{ r.ip || '-' }}<span v-if="r.fakeIP" class="badge warn" style="margin-left:6px" :title="FAKE_IP_HINT">fake-IP</span><div class="sub ipgeo" v-if="r.ipGeo && !r.fakeIP">{{ r.ipGeo }}</div></td>
+            <td class="mono col-ip">{{ r.ip || '-' }}<span v-if="r.fakeIP" class="badge warn" style="margin-left:6px" :title="FAKE_IP_HINT">fake-IP</span><div class="sub ipgeo" v-if="r.ipGeo && !r.fakeIP">{{ r.ipGeo }}</div></td>
             <td>
               <span v-if="r.last?.status_code" class="badge" :class="codeClass(r.last.status_code)">{{ r.last.status_code }}</span>
               <span v-else class="sub">-</span>

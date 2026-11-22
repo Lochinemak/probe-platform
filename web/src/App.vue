@@ -9,6 +9,7 @@ import MonitorsView from './views/Monitors.vue'
 import NotifyView from './views/Notify.vue'
 import SettingsView from './views/Settings.vue'
 import CoverageView from './views/Coverage.vue'
+import SharePage from './views/SharePage.vue'
 
 // Pages in nav order. The current one lives in the URL path (see route.js),
 // so a reload, bookmark or back button lands on the same page. `menu` pages
@@ -23,6 +24,9 @@ const TABS = {
   settings: { label: '设置', admin: true, menu: true },
 }
 const tab = computed(() => route.page)
+// A shared result is public: it shows whatever the session is, without the
+// navigation, and before the login wall when guest access is off.
+const sharing = computed(() => route.page === 'share')
 function go(name, replace = false) {
   menuOpen.value = false
   if (route.page === name && !route.taskId) return
@@ -50,13 +54,13 @@ async function loadSession() {
 // admin session: ask for a login and keep the tab so a successful login lands
 // there; anything else falls back to the default tab.
 function ensureAllowed() {
-  if (!session.value || gated.value || !TABS[tab.value].admin || isAdmin.value) return
+  if (!session.value || gated.value || sharing.value || !TABS[tab.value].admin || isAdmin.value) return
   if (session.value.auth_required && !session.value.authenticated) { showLogin.value = true; return }
   go('probe', true)
 }
 function closeLogin() {
   showLogin.value = false
-  if (TABS[tab.value].admin && !isAdmin.value) go('probe', true)
+  if (TABS[tab.value]?.admin && !isAdmin.value) go('probe', true)
 }
 async function login() {
   busy.value = true
@@ -70,7 +74,7 @@ async function login() {
 }
 async function logout() {
   await api.logout().catch(() => {})
-  if (TABS[tab.value].admin) go('probe', true)
+  if (TABS[tab.value]?.admin) go('probe', true)
   await loadSession()
 }
 function onUnauthorized() {
@@ -100,19 +104,19 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick)
 })
 // The probe page titles itself after the probe type.
-watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨测平台`; ensureAllowed() }, { immediate: true })
+watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].label} · 拨测平台`; ensureAllowed() }, { immediate: true })
 </script>
 
 <template>
   <div class="app">
     <header class="topbar">
       <div class="brand"><span class="dot"></span> 拨测平台</div>
-      <nav class="nav" v-if="session && !gated">
+      <nav class="nav" v-if="session && !gated && !sharing">
         <template v-for="(def, name) in TABS" :key="name">
           <button v-if="!def.menu && (!def.admin || isAdmin)" :class="{ active: tab === name }" :aria-current="tab === name ? 'page' : undefined" @click="go(name)">{{ def.label }}</button>
         </template>
         <div class="nav-menu" v-if="isAdmin">
-          <button :class="{ active: TABS[tab].menu }" aria-haspopup="menu" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">{{ TABS[tab].menu ? TABS[tab].label : '管理' }} ▾</button>
+          <button :class="{ active: TABS[tab]?.menu }" aria-haspopup="menu" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">{{ TABS[tab]?.menu ? TABS[tab].label : '管理' }} ▾</button>
           <div class="nav-pop" v-if="menuOpen" role="menu">
             <template v-for="(def, name) in TABS" :key="name">
               <button v-if="def.menu" role="menuitem" :class="{ active: tab === name }" @click="go(name)">{{ def.label }}</button>
@@ -121,7 +125,8 @@ watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨
         </div>
       </nav>
       <div class="spacer"></div>
-      <div class="meta" v-if="session">
+      <a class="btn sm" v-if="sharing" href="/">发起新的探测</a>
+      <div class="meta" v-if="session && !sharing">
         <span v-if="session.version">v{{ session.version }}</span>
         <template v-if="session.auth_required">
           <template v-if="isAdmin">
@@ -136,7 +141,9 @@ watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨
       </div>
     </header>
 
-    <div v-if="!session" class="empty">加载中…</div>
+    <SharePage v-if="sharing" :token="route.token" />
+
+    <div v-else-if="!session" class="empty">加载中…</div>
 
     <!-- Login: full page when guests are off, modal otherwise -->
     <div v-else-if="gated || showLogin" class="card login" :class="{ modal: !gated }">
@@ -159,7 +166,7 @@ watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨
       <p class="sub" v-if="!gated" style="margin:12px 0 0">游客可以直接使用拨测功能；登录后可管理监控、通知渠道和节点。</p>
     </div>
 
-    <template v-if="session && !gated">
+    <template v-if="session && !gated && !sharing">
       <div v-show="!showLogin">
         <ProbeView v-show="tab === 'probe'" :role="session.role" />
         <CoverageView v-if="tab === 'coverage'" />

@@ -32,7 +32,8 @@ export function tableOf(task, rows) {
 }
 
 export function exportTitle(task) {
-  return `${TYPE_INFO[task.type]?.title || task.type} · ${task.target}`
+  const title = TYPE_INFO[task.type]?.title || task.type
+  return task.target ? `${title} · ${task.target}` : title // a shared result may withhold the target
 }
 
 export function toMarkdown(task, rows) {
@@ -68,6 +69,6 @@ export function download(filename, text, mime) {
 }
 
 export function exportFilename(task, ext) {
-  const safe = String(task.target).replace(/^https?:\/\//, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'result'
-  return `${task.type}-${safe}-${task.id}.${ext}`
+  const safe = String(task.target || '').replace(/^https?:\/\//, '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'result'
+  return [task.type, safe, task.id].filter(Boolean).join('-') + '.' + ext
 }

@@ -28,10 +28,10 @@ const continuous = computed(() => !!props.task.params?.continuous)
     <table class="grid">
       <thead>
         <tr>
-          <SortTh :sort="sort" k="name">检测点</SortTh>
+          <SortTh :sort="sort" k="name" class="col-name">检测点</SortTh>
           <SortTh :sort="sort" k="place">地域</SortTh>
           <SortTh :sort="sort" k="line">线路</SortTh>
-          <SortTh :sort="sort" k="ip">响应 IP</SortTh>
+          <SortTh :sort="sort" k="ip" class="col-ip">响应 IP</SortTh>
           <th class="num">发送/接收</th>
           <SortTh :sort="sort" k="loss" num>丢包率</SortTh>
           <SortTh v-if="continuous" :sort="sort" k="latest" num>最新</SortTh>
@@ -46,10 +46,10 @@ const continuous = computed(() => !!props.task.params?.continuous)
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.agent_id">
-          <td><b>{{ r.agent_name }}</b></td>
+          <td class="col-name"><b>{{ r.agent_name }}</b></td>
           <td class="sub">{{ r.place || '-' }}</td>
           <td><span class="badge" v-if="r.line">{{ r.line }}</span><span v-else class="sub">-</span></td>
-          <td class="mono">{{ r.ip || '-' }}<span v-if="r.port" class="sub">:{{ r.port }}</span><div class="sub ipgeo" v-if="r.ipGeo">{{ r.ipGeo }}</div></td>
+          <td class="mono col-ip">{{ r.ip || '-' }}<span v-if="r.port" class="sub">:{{ r.port }}</span><div class="sub ipgeo" v-if="r.ipGeo">{{ r.ipGeo }}</div></td>
           <td class="num">{{ r.stats?.sent ?? 0 }}/{{ r.stats?.received ?? 0 }}</td>
           <td class="num" :class="lossClass(r.stats?.loss_pct)">{{ r.stats?.sent ? pct(r.stats.loss_pct) : '-' }}</td>
           <td class="num" v-if="continuous" :class="bucketClass(task.type, r.latest)">{{ ms(r.latest) }}</td>

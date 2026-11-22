@@ -11,6 +11,10 @@ describe('parse', () => {
     expect(parse('/t/mabc123')).toMatchObject({ page: 'probe', type: '', taskId: 'mabc123' })
     expect(parse(taskPath('a b'))).toMatchObject({ taskId: 'a b' })
   })
+  it('maps share links', () => {
+    expect(parse('/s/abc123')).toMatchObject({ page: 'share', token: 'abc123' })
+    expect(parse('/s')).toMatchObject({ page: 'probe' })
+  })
   it('maps the other pages', () => {
     for (const p of ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
     expect(parse('/monitors', '?id=m1').query.id).toBe('m1')

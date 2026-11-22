@@ -124,5 +124,7 @@ describe('exports', () => {
   })
   it('names the file after the task', () => {
     expect(exportFilename({ id: 't1', type: 'http', target: 'https://www.example.com/a?b=1' }, 'csv')).toBe('http-www.example.com_a_b_1-t1.csv')
+    // A shared result has neither the target nor the task id.
+    expect(exportFilename({ id: '', type: 'ping', target: '' }, 'png')).toBe('ping-result.png')
   })
 })

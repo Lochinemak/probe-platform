@@ -144,6 +144,7 @@ table.grid tr.clickable { cursor: pointer; }
 .result-title h2 { margin: 0; font-size: 17px; }
 .result-title .target { color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.result-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .result-meta .live { color: var(--accent-2); font-size: 12.5px; }
 .export-menu { position: relative; }
 .nav-pop.right { left: auto; right: 0; min-width: 190px; }
@@ -175,6 +176,34 @@ table.grid tr.clickable { cursor: pointer; }
 .stat-value.warn { color: var(--warn); }
 .coverage-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 .coverage-main .card { margin-bottom: 16px; }
+/* Dialogs. */
+.backdrop { position: fixed; inset: 0; z-index: 800; background: rgba(0,0,0,.5); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 12px; overflow-y: auto; }
+.dialog { width: min(640px, 100%); margin: 0; box-shadow: 0 16px 48px rgba(0,0,0,.4); }
+.share-flags { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 12px 0 0; display: grid; gap: 6px; }
+.share-flags legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.share-flags label { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.share-link { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.share-link input { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+.share-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.shot-preview { margin-top: 12px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.shot-preview img { display: block; width: 100%; }
+a.btn { display: inline-block; color: var(--text); }
+
+/* Screenshot: marker classes the dialog puts on .result-view while it is
+   being captured. */
+.shot-footer { display: none; color: var(--muted); font-size: 12px; margin-top: 12px; text-align: right; }
+.result-view.shot { width: max-content; min-width: 1080px; max-width: none; }
+.shot .no-shot, .shot .backdrop, .shot .th-btn[aria-expanded], .shot .result-map > .row { display: none !important; }
+.shot .table-wrap { overflow: visible; }
+.shot .shot-footer { display: block; }
+.shot.shot-no-stamp .shot-stamp { display: none; }
+.shot.shot-simple .shot-detail { display: none; }
+.shot.shot-no-target .result-title .target { display: none; }
+.shot.shot-no-time .result-time { display: none; }
+.shot.shot-no-map .result-map { display: none; }
+.shot.shot-no-ips .ip-summary, .shot.shot-no-ips .col-ip, .shot.shot-no-ips .ip-text { display: none; }
+.shot.shot-no-names .col-name { display: none; }
+.shot .map-box { margin-left: 0; }
 /* Maps. */
 .result-map { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
 .map-box { position: relative; max-width: 860px; margin: 8px auto 0; }

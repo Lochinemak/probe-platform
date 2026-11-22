@@ -15,10 +15,10 @@ function toggle(r) { folded[r.agent_id] = isOpen(r) }
     <div class="card mtr-card" v-for="r in results" :key="r.agent_id">
       <div class="mtr-head">
         <button type="button" class="th-btn" :aria-expanded="isOpen(r)" :aria-label="`${r.agent_name} 的逐跳明细`" @click="toggle(r)">{{ isOpen(r) ? '▾' : '▸' }}</button>
-        <span class="name">{{ r.agent_name }}</span>
+        <span class="name col-name">{{ r.agent_name }}</span>
         <span class="sub">{{ r.place }}</span>
         <span class="badge" v-if="r.line">{{ r.line }}</span>
-        <span class="mono sub" v-if="r.ip">→ {{ r.ip }}</span>
+        <span class="mono sub col-ip" v-if="r.ip">→ {{ r.ip }}</span>
         <span class="sub" v-if="r.ipGeo">{{ r.ipGeo }}</span>
         <span class="badge" v-if="r.protocol">{{ r.protocol.toUpperCase() }}<template v-if="r.port">:{{ r.port }}</template></span>
         <span class="badge" v-if="r.rounds">{{ r.rounds }} 轮</span>
@@ -29,7 +29,7 @@ function toggle(r) { folded[r.agent_id] = isOpen(r) }
       </div>
       <div class="mtr-summary" v-if="r.hops?.length">
         <span>跳数 <b>{{ r.hopCount }}</b></span>
-        <span>最后一跳 <b class="mono">{{ r.lastHop?.hosts?.[0] || '* * *' }}</b></span>
+        <span class="col-ip">最后一跳 <b class="mono">{{ r.lastHop?.hosts?.[0] || '* * *' }}</b></span>
         <span>已采样 <b>{{ r.sampled }}</b></span>
         <span>末跳丢包 <b :class="lossClass(r.lastHop?.loss_pct)">{{ r.lastHop ? pct(r.lastHop.loss_pct) : '-' }}</b></span>
         <span>平均延迟 <b :class="bucketClass('mtr', r.metric)">{{ r.metric !== undefined ? ms(r.metric) + ' ms' : '-' }}</b></span>
@@ -55,8 +55,8 @@ function toggle(r) { folded[r.agent_id] = isOpen(r) }
               <td class="hop-host" style="white-space:normal">
                 <template v-if="h.hosts?.length">
                   <div v-for="(host, i) in h.hosts" :key="host">
-                    {{ host }}
-                    <span class="name" v-if="h.names?.[i]">({{ h.names[i] }})</span>
+                    <span class="ip-text">{{ host }}</span>
+                    <span class="name ip-text" v-if="h.names?.[i]">({{ h.names[i] }})</span>
                     <span class="geo" v-if="h.geo?.[i]">{{ h.geo[i] }}</span>
                   </div>
                 </template>

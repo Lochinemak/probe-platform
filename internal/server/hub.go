@@ -41,7 +41,7 @@ type Hub struct {
 
 	// taskDone is invoked (in its own goroutine) once every agent of a task
 	// has reached a terminal state. Set by the scheduler.
-	taskDone func(protocol.Task, []*protocol.AgentResult)
+	taskDone []func(protocol.Task, []*protocol.AgentResult)
 	// legacyToken returns the old shared agent token while it is still
 	// accepted, "" otherwise. Set by NewHandler from Settings.
 	legacyToken func() string
@@ -73,18 +73,24 @@ func NewHub(cfg Config, store *Store, geo *GeoIP, files *AgentFiles, log *slog.L
 	return h
 }
 
-// SetTaskDoneHook registers the completion callback.
-func (h *Hub) SetTaskDoneHook(fn func(protocol.Task, []*protocol.AgentResult)) { h.taskDone = fn }
+// AddTaskDoneHook registers a completion callback. Hooks are added while the
+// server is being wired up, before any task exists; each gets the same task
+// and results and must not modify them.
+func (h *Hub) AddTaskDoneHook(fn func(protocol.Task, []*protocol.AgentResult)) {
+	h.taskDone = append(h.taskDone, fn)
+}
 
 // notifyDone snapshots a finished task and hands it to the hook.
 func (h *Hub) notifyDone(tr *taskRun) {
-	if h.taskDone == nil {
+	if len(h.taskDone) == 0 {
 		return
 	}
 	tr.mu.Lock()
 	snap := tr.snapshotLocked()
 	tr.mu.Unlock()
-	go h.taskDone(*snap.Task, snap.Results)
+	for _, fn := range h.taskDone {
+		go fn(*snap.Task, snap.Results)
+	}
 }
 
 // --- agent connections ------------------------------------------------------
@@ -1103,6 +1109,12 @@ func (h *Hub) janitor() {
 				} else if n > 0 {
 					h.log.Info("pruned old samples", "count", n)
 				}
+			}
+			// Shares that stopped working a month ago are of no use to anyone.
+			if n, err := h.store.PruneShares(now.AddDate(0, 0, -30)); err != nil {
+				h.log.Error("prune shares", "err", err)
+			} else if n > 0 {
+				h.log.Info("pruned old shares", "count", n)
 			}
 			// Per-run details of scheduled monitors are bulky; keep them briefly.
 			if n, err := h.store.PruneMonitorTasks(now.Add(-h.cfg.MonitorTaskRetain)); err != nil {

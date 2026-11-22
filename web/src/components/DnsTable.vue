@@ -20,10 +20,10 @@ watch(rows, (v) => emit('order', v), { immediate: true })
     <table class="grid">
       <thead>
         <tr>
-          <SortTh :sort="sort" k="name">检测点</SortTh>
+          <SortTh :sort="sort" k="name" class="col-name">检测点</SortTh>
           <SortTh :sort="sort" k="place">地域</SortTh>
           <SortTh :sort="sort" k="line">线路</SortTh>
-          <SortTh :sort="sort" k="server">解析器</SortTh>
+          <SortTh :sort="sort" k="server" class="col-ip">解析器</SortTh>
           <th>协议</th>
           <SortTh :sort="sort" k="rtt" num>解析耗时</SortTh>
           <th>RCode</th>
@@ -33,10 +33,10 @@ watch(rows, (v) => emit('order', v), { immediate: true })
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.agent_id">
-          <td><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
+          <td class="col-name"><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
           <td class="sub">{{ r.place || '-' }}</td>
           <td><span class="badge" v-if="r.line">{{ r.line }}</span><span v-else class="sub">-</span></td>
-          <td class="mono">{{ r.last?.server || '-' }}</td>
+          <td class="mono col-ip">{{ r.last?.server || '-' }}</td>
           <td class="sub">{{ r.last?.proto || '-' }}<span v-if="r.last?.truncated" title="UDP 应答被截断，已改用 TCP"> (TC)</span></td>
           <td class="num" :class="bucketClass('dns', r.last?.ok ? r.last.rtt_ms : undefined)">{{ r.last?.ok ? ms(r.last.rtt_ms) : '-' }}</td>
           <td>
@@ -46,7 +46,7 @@ watch(rows, (v) => emit('order', v), { immediate: true })
           <td style="white-space:normal;max-width:520px">
             <template v-if="r.last?.answers?.length">
               <div v-for="(a, i) in r.last.answers" :key="i" class="mono" style="font-size:12.5px">
-                <span class="badge" style="margin-right:6px">{{ a.type }}</span>{{ a.value }}
+                <span class="badge" style="margin-right:6px">{{ a.type }}</span><span class="ip-text">{{ a.value }}</span>
                 <span class="sub"> TTL {{ a.ttl }}s</span><span class="sub" v-if="a.geo"> · {{ a.geo }}</span>
                 <span v-if="a.type === 'A' && /^198\.1[89]\./.test(a.value)" class="badge bad" style="margin-left:6px" title="198.18.0.0/15：透明代理 fake-IP，节点 DNS 被劫持">fake-IP</span>
               </div>
