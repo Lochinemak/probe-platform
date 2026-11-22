@@ -296,6 +296,21 @@ func TestPropagationOddAndMissing(t *testing.T) {
 	if d := out.stages["delegation"]; d.State != "done" || d.Zone != "test." || !strings.Contains(d.Note, "NXDOMAIN") {
 		t.Fatalf("delegation of a missing name: %+v", d)
 	}
+	// The registry's servers are not the name's own: nothing more to ask.
+	if a := out.stages["authority"]; a.State != "skipped" {
+		t.Fatalf("authority of a missing name: %+v", a)
+	}
+
+	// Root servers that are out of reach do not stop the walk: three are
+	// asked at once, then the next ones.
+	f = newFakeDNS(false)
+	c := f.checker()
+	c.roots = []nsAddr{{"x.root", "8.8.9.1"}, {"y.root", "8.8.9.2"}, {"z.root", "8.8.9.3"}, {"a.root-servers.net", fRoot}}
+	req, _ = parsePropRequest("www.example.test", "A", "quick", "")
+	out = runProp(t, c, req)
+	if d := out.stages["delegation"]; d.State != "done" || d.Zone != "example.test." {
+		t.Fatalf("delegation past dead roots: %+v", d)
+	}
 }
 
 func TestPropagationBudget(t *testing.T) {
@@ -347,6 +362,12 @@ func TestParsePropRequest(t *testing.T) {
 	}
 	if verdictOf(&propRow{OK: true, RCode: "NameError", Values: []string{}}, "A", []string{"1.1.1.1"}, "expect") != "empty" {
 		t.Error("NXDOMAIN should count as an empty answer")
+	}
+	if verdictOf(&propRow{OK: true, RCode: "NameError", Values: []string{}}, "A", nil, "") != "empty" {
+		t.Error("NXDOMAIN is an empty answer even with nothing to compare with")
+	}
+	if verdictOf(&propRow{Stage: "authority", OK: true, RCode: "Success", CNAME: "cdn.example.net", Values: []string{}}, "A", []string{"1.1.1.1"}, "majority") != "" {
+		t.Error("an alias on the zone's server is not an empty answer")
 	}
 }
 

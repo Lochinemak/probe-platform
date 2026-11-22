@@ -41,12 +41,12 @@ import (
 const (
 	propDeadline    = 20 * time.Second
 	propMaxQueries  = 150
-	propConcurrency = 16
+	propConcurrency = 40
 	propMaxNS       = 10
 	propSlots       = 2
 	propCacheTTL    = 30 * time.Second
-	propHopTimeout  = 2 * time.Second
-	propAskTimeout  = 3 * time.Second
+	propHopTimeout  = 1500 * time.Millisecond
+	propAskTimeout  = 2 * time.Second
 )
 
 // propTypes are the record types the check accepts, in the order the form
@@ -289,6 +289,8 @@ type propRun struct {
 	// nsListed is how many name servers the last referral named; only the
 	// first propMaxNS are asked.
 	nsListed int
+	// nsNames are all of them, for comparing with the zone's own NS records.
+	nsNames []string
 }
 
 var errPropBudget = errors.New("本次检测的查询次数已用完")
@@ -391,66 +393,103 @@ func (r *propRun) note(s string) {
 
 // walk follows referrals from the root until a server answers for the name
 // itself. It returns the zone that holds the name and that zone's servers.
+//
+// At each level up to three servers are asked at once and the first usable
+// reply wins, with a second batch if none of the first gives one: from some
+// networks a root or TLD server is out of reach now and then, and waiting
+// for them one after another would use up the run's time.
 func (r *propRun) walk(ctx context.Context) (zone string, servers []nsAddr, hops []propHop, nx bool, err error) {
 	servers = append([]nsAddr(nil), r.c.roots...)
 	rand.Shuffle(len(servers), func(i, j int) { servers[i], servers[j] = servers[j], servers[i] })
 	for depth := 0; depth < 12; depth++ {
-		var reply *probe.DNSMessage
-		tried := 0
+		var usable []nsAddr
 		for _, s := range servers {
-			if s.Addr == "" {
-				continue
+			if s.Addr != "" {
+				usable = append(usable, s)
 			}
-			if tried++; tried > 3 {
+		}
+		if len(usable) == 0 {
+			return zone, servers, hops, false, errors.New(zoneLabel(zone) + " 的权威服务器都没有可用的 IPv4 地址")
+		}
+		var won *hopReply
+		for start := 0; start < len(usable) && start < 2*propRace && won == nil; start += propRace {
+			var failed []propHop
+			won, failed = r.raceHop(ctx, zone, usable[start:min(start+propRace, len(usable))])
+			hops = append(hops, failed...)
+			if won != nil {
+				hops = append(hops, won.hop)
+			}
+			r.emitHops(hops)
+			if ctx.Err() != nil || r.queries.Load() > propMaxQueries {
 				break
 			}
-			hop := propHop{Zone: zoneLabel(zone), Server: s.Host, Addr: s.Addr}
-			m, aerr := r.ask(ctx, s.Addr, r.req.Name, r.req.Type, false, propHopTimeout)
-			if aerr != nil {
-				hop.Result, hop.Error = "error", aerr.Error()
-				hops = append(hops, hop)
-				r.emitHops(hops)
-				if errors.Is(aerr, errPropBudget) || ctx.Err() != nil {
-					return zone, servers, hops, false, aerr
-				}
-				continue
+		}
+		if won == nil {
+			return zone, servers, hops, false, errors.New(zoneLabel(zone) + " 的服务器没有给出可用的应答")
+		}
+		if won.hop.Result != "referral" {
+			return r.apex(ctx, won.hop.Addr, zone), servers, hops, won.hop.Result == "nxdomain", nil
+		}
+		zone, r.nsNames = won.next, won.ns
+		servers = r.addresses(ctx, won.msg, won.ns)
+	}
+	return zone, servers, hops, false, errors.New("委派层级过深")
+}
+
+// propRace is how many servers of a zone are asked at once on the way down.
+const propRace = 3
+
+type hopReply struct {
+	hop  propHop
+	msg  *probe.DNSMessage
+	next string
+	ns   []string
+}
+
+// raceHop asks the servers at once and returns the first reply that is an
+// authoritative answer or a referral, plus the attempts that failed before it.
+func (r *propRun) raceHop(ctx context.Context, zone string, servers []nsAddr) (*hopReply, []propHop) {
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := make(chan hopReply, len(servers))
+	for _, s := range servers {
+		go func() {
+			rep := hopReply{hop: propHop{Zone: zoneLabel(zone), Server: s.Host, Addr: s.Addr}}
+			m, err := r.ask(cctx, s.Addr, r.req.Name, r.req.Type, false, propHopTimeout)
+			if err != nil {
+				rep.hop.Result, rep.hop.Error = "error", err.Error()
+				ch <- rep
+				return
 			}
-			hop.RTTMs = m.RTTMs
+			rep.msg, rep.hop.RTTMs = m, m.RTTMs
 			next, ns, isRef := referralOf(m, r.req.Name, zone)
 			switch {
 			case m.Authoritative && !isRef:
-				hop.Result = "answer"
+				rep.hop.Result = "answer"
 				if m.RCode == "NameError" {
-					hop.Result = "nxdomain"
+					rep.hop.Result = "nxdomain"
 				}
 			case isRef:
-				hop.Result, hop.Next, hop.NS = "referral", zoneLabel(next), ns
+				rep.hop.Result, rep.hop.Next, rep.hop.NS = "referral", zoneLabel(next), ns
+				rep.next, rep.ns = next, ns
 			default:
 				// Neither an answer the server vouches for nor a pointer
 				// further down: not something a root or TLD server says.
 				// Seen when a reply is forged on the way.
-				hop.Result, hop.Error = "odd", "应答既不是权威应答也不是转介（rcode "+m.RCode+"）"
-				hops = append(hops, hop)
-				r.emitHops(hops)
-				continue
+				rep.hop.Result, rep.hop.Error = "odd", "应答既不是权威应答也不是转介（rcode "+m.RCode+"）"
 			}
-			hops = append(hops, hop)
-			r.emitHops(hops)
-			reply = m
-			if hop.Result != "referral" {
-				return r.apex(ctx, s.Addr, zone), servers, hops, hop.Result == "nxdomain", nil
-			}
-			zone, servers = next, r.addresses(ctx, m, ns)
-			break
-		}
-		if reply == nil {
-			if tried == 0 {
-				return zone, servers, hops, false, errors.New(zoneLabel(zone) + " 的权威服务器都没有可用的 IPv4 地址")
-			}
-			return zone, servers, hops, false, errors.New(zoneLabel(zone) + " 的服务器没有给出可用的应答")
-		}
+			ch <- rep
+		}()
 	}
-	return zone, servers, hops, false, errors.New("委派层级过深")
+	var failed []propHop
+	for range servers {
+		rep := <-ch
+		if rep.hop.Result == "answer" || rep.hop.Result == "nxdomain" || rep.hop.Result == "referral" {
+			return &rep, failed
+		}
+		failed = append(failed, rep.hop)
+	}
+	return nil, failed
 }
 
 // apex narrows the zone down when one set of servers holds a zone and its
@@ -568,11 +607,16 @@ func verdictOf(row *propRow, typ string, ref []string, source string) string {
 	if !row.OK || (row.RCode != "Success" && row.RCode != "NameError") {
 		return "unknown"
 	}
+	if len(row.Values) == 0 {
+		// An alias on the zone's own server: the record is somewhere else,
+		// which is not the same as there being none.
+		if row.Stage == "authority" && row.CNAME != "" {
+			return ""
+		}
+		return "empty"
+	}
 	if source == "" {
 		return ""
-	}
-	if len(row.Values) == 0 {
-		return "empty"
 	}
 	if source == "expect" {
 		for _, want := range ref {
@@ -644,6 +688,10 @@ func (c *propChecker) run(ctx context.Context, req propRequest, hub *Hub, emit f
 	var authRows []*propRow
 	if werr != nil {
 		emit(propEvent{Type: "stage", Stage: &propStage{ID: "authority", State: "skipped", Note: "没有找到负责这个域名的区，跳过"}})
+	} else if nx && labelCount(zone) <= 1 {
+		// The registry says there is no such domain: it has no servers of
+		// its own to ask, and the registry's dozen say the same thing.
+		emit(propEvent{Type: "stage", Stage: &propStage{ID: "authority", State: "skipped", Note: "域名没有注册或没有委派，没有它自己的权威服务器可问"}})
 	} else {
 		authRows = r.authority(ctx, zone, servers)
 	}
@@ -719,7 +767,7 @@ func (c *propChecker) run(ctx context.Context, req propRequest, hub *Hub, emit f
 			sum.Differ++
 		case "empty":
 			sum.Empty++
-		default:
+		case "unknown":
 			sum.Unknown++
 		}
 	}
@@ -784,9 +832,11 @@ func agreedValues(rows []*propRow) ([]string, bool) {
 // authority asks every server of the zone for the record and for the zone's
 // SOA serial.
 func (r *propRun) authority(ctx context.Context, zone string, servers []nsAddr) []*propRow {
-	var parent []string
-	for _, s := range servers {
-		parent = append(parent, s.Host)
+	parent := r.nsNames
+	if len(parent) == 0 {
+		for _, s := range servers {
+			parent = append(parent, s.Host)
+		}
 	}
 	r.emit(propEvent{Type: "stage", Stage: &propStage{ID: "authority", State: "running", Total: len(servers), Zone: zoneLabel(zone), NSParent: parent}})
 	rows := make([]*propRow, len(servers))
@@ -838,7 +888,7 @@ func (r *propRun) authority(ctx context.Context, zone string, servers []nsAddr) 
 	var notes []string
 	notes = append(notes, fmt.Sprintf("%d 台中 %d 台有应答", len(rows), answered))
 	if len(serials) > 1 {
-		notes = append(notes, "各台的 SOA 序列号不一致，区数据还没有同步完")
+		notes = append(notes, "各台的 SOA 序列号不一致（刚改过记录时说明还没同步完；混用多家 DNS 服务商的域名，各家的序列号本来就不同）")
 	} else if len(serials) == 1 {
 		notes = append(notes, "SOA 序列号一致")
 	}
