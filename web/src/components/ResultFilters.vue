@@ -1,7 +1,7 @@
 <script setup>
 // Narrowing a result table: by line (电信 / 联通 / …), by region (华东 / …
 // / 海外), failures only, plus whatever the response-IP summary or the map
-// set. `modelValue` is { line, region, place, ip, failed }; the counts beside
+// set. `modelValue` is { line, region, map, ip, failed }; the counts beside
 // each choice are of the unfiltered rows.
 import { computed } from 'vue'
 import { LINES, REGIONS, UNKNOWN_PLACE } from '../geo.js'
@@ -26,7 +26,7 @@ const regions = computed(() => {
   return order.filter((n) => m.has(n)).map((n) => ({ value: n, count: m.get(n) }))
 })
 const failedCount = computed(() => props.rows.filter((r) => r.failed).length)
-const active = computed(() => !!(f.value.line || f.value.region || f.value.place || f.value.ip || f.value.failed))
+const active = computed(() => !!(f.value.line || f.value.region || f.value.map || f.value.ip || f.value.failed))
 </script>
 
 <template>
@@ -46,10 +46,10 @@ const active = computed(() => !!(f.value.line || f.value.region || f.value.place
       <span class="sub">当前筛选</span>
       <button v-if="f.line" type="button" class="tag" @click="set({ line: '' })">线路：{{ f.line }} ×</button>
       <button v-if="f.region" type="button" class="tag" @click="set({ region: '' })">地区：{{ f.region }} ×</button>
-      <button v-if="f.place" type="button" class="tag" @click="set({ place: '' })">地图联动：{{ f.place }} ×</button>
+      <button v-if="f.map" type="button" class="tag" @click="set({ map: null })">地图联动：{{ f.map.name }} ×</button>
       <button v-if="f.ip" type="button" class="tag" @click="set({ ip: '' })">响应 IP：{{ f.ip }} ×</button>
       <button v-if="f.failed" type="button" class="tag" @click="set({ failed: false })">仅看失败 ×</button>
-      <button type="button" class="btn link sm" @click="set({ line: '', region: '', place: '', ip: '', failed: false })">清除全部</button>
+      <button type="button" class="btn link sm" @click="set({ line: '', region: '', map: null, ip: '', failed: false })">清除全部</button>
     </div>
   </div>
 </template>

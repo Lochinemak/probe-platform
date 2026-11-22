@@ -5,12 +5,12 @@
 //   /                       probe page, last used probe type
 //   /ping /tcping /http …   probe page with that type (?target= prefills the form)
 //   /t/<taskId>             probe page showing that task
-//   /monitors /agents …     the other pages
+//   /coverage /monitors …    the other pages
 import { reactive } from 'vue'
 
 // Probe types in tab order. The id is both the task type and the URL path.
 export const PROBE_TYPES = ['ping', 'tcping', 'http', 'dns', 'mtr']
-export const PAGES = ['monitors', 'agents', 'history', 'notify', 'settings']
+export const PAGES = ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']
 
 export function parse(pathname, search = '') {
   const parts = String(pathname || '').split('/').filter(Boolean)

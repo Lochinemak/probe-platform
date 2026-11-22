@@ -12,7 +12,7 @@ describe('parse', () => {
     expect(parse(taskPath('a b'))).toMatchObject({ taskId: 'a b' })
   })
   it('maps the other pages', () => {
-    for (const p of ['monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
+    for (const p of ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
     expect(parse('/monitors', '?id=m1').query.id).toBe('m1')
   })
   it('falls back to the probe page', () => {

@@ -8,6 +8,8 @@ import { latencyScale } from '../fmt.js'
 import ResultHeader from './ResultHeader.vue'
 import MetricCards from './MetricCards.vue'
 import IpSummary from './IpSummary.vue'
+import ResultMap from './ResultMap.vue'
+import { regionId } from '../maps.js'
 import ResultFilters from './ResultFilters.vue'
 import PingTable from './PingTable.vue'
 import HttpTable from './HttpTable.vue'
@@ -19,12 +21,13 @@ const emit = defineEmits(['update:zen'])
 
 const rows = computed(() => (props.results || []).map((r) => derive(props.task, r)))
 
-const NO_FILTER = { line: '', region: '', place: '', ip: '', failed: false }
+// `map` is the region picked on the map: { by: 'province' | 'cc', id, name }.
+const NO_FILTER = { line: '', region: '', map: null, ip: '', failed: false }
 const filter = ref({ ...NO_FILTER })
 watch(() => props.task?.id, () => { filter.value = { ...NO_FILTER } })
 const filtered = computed(() => {
   const f = filter.value
-  return rows.value.filter((r) => (!f.line || (r.line || '其他') === f.line) && (!f.region || r.region === f.region) && (!f.place || r.placeKey === f.place)
+  return rows.value.filter((r) => (!f.line || (r.line || '其他') === f.line) && (!f.region || r.region === f.region) && (!f.map || regionId(f.map.by === 'cc' ? 'world' : 'china', r.geo) === f.map.id)
     && (!f.ip || (r.ips || []).some((x) => x.ip === f.ip)) && (!f.failed || r.failed))
 })
 const scale = computed(() => latencyScale(props.task.type))
@@ -43,6 +46,7 @@ const shown = ref([])
       <span><i class="lat-bg-x"></i>超时 / 无数据</span>
       <span class="sub" v-if="isHTTP">HTTP 耗时是整个请求（解析、连接、TLS、等待首字节、下载）的时间，不是链路往返延迟。</span>
     </div>
+    <ResultMap :task="task" :rows="rows" :selected="filter.map" @select="filter = { ...filter, map: $event }" />
     <IpSummary v-if="task.type !== 'mtr'" :rows="rows" :selected="filter.ip" @select="filter = { ...filter, ip: $event }" />
     <ResultFilters v-model="filter" :rows="rows" />
     <div class="empty" v-if="rows.length && !filtered.length">没有符合当前筛选的节点。</div>

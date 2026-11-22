@@ -8,12 +8,14 @@ import HistoryView from './views/History.vue'
 import MonitorsView from './views/Monitors.vue'
 import NotifyView from './views/Notify.vue'
 import SettingsView from './views/Settings.vue'
+import CoverageView from './views/Coverage.vue'
 
 // Pages in nav order. The current one lives in the URL path (see route.js),
 // so a reload, bookmark or back button lands on the same page. `menu` pages
 // sit behind the 管理 menu instead of taking a slot in the bar.
 const TABS = {
   probe: { label: '拨测' },
+  coverage: { label: '节点覆盖' },
   monitors: { label: '监控', admin: true },
   agents: { label: '节点' },
   history: { label: '历史' },
@@ -160,6 +162,7 @@ watch(tab, (t) => { if (t !== 'probe') document.title = `${TABS[t].label} · 拨
     <template v-if="session && !gated">
       <div v-show="!showLogin">
         <ProbeView v-show="tab === 'probe'" :role="session.role" />
+        <CoverageView v-if="tab === 'coverage'" />
         <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openTask" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
