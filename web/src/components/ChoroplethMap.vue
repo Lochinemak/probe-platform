@@ -15,6 +15,9 @@ const props = defineProps({
 const emit = defineEmits(['select'])
 
 const box = ref(null)
+// The inset (the South China Sea on the map of China) redraws the same shapes
+// through <use>, so they need an id that is unique on the page.
+const gid = 'map-' + Math.random().toString(36).slice(2, 8)
 const tip = ref(null) // { id, x, y }
 const viewBox = computed(() => props.map.viewBox.join(' '))
 const withValue = computed(() => props.map.regions.filter((r) => props.values[r.id]))
@@ -38,8 +41,9 @@ const tipValue = computed(() => (tip.value ? props.values[tip.value.id] : null))
 </script>
 
 <template>
-  <div class="map-box" ref="box" @mouseleave="tip = null">
+  <div class="map-box" :class="map.id" ref="box" @mouseleave="tip = null">
     <svg :viewBox="viewBox" role="group" :aria-label="label" preserveAspectRatio="xMidYMid meet">
+      <g :id="gid">
       <path v-if="map.other" class="map-other" :d="map.other" />
       <template v-for="r in ordered" :key="r.id">
         <path class="map-region" :class="{ has: values[r.id], on: r.id === selected }" :d="r.d" :style="values[r.id] ? { fill: values[r.id].fill } : null"
@@ -51,6 +55,15 @@ const tipValue = computed(() => (tip.value ? props.values[tip.value.id] : null))
       <circle v-for="r in withValue.filter((x) => x.small)" :key="'dot-' + r.id" class="map-dot" :class="{ on: r.id === selected }" :cx="r.cx" :cy="r.cy" r="5" :style="{ fill: values[r.id].fill }"
         @click="pick(r)" @mousemove="move($event, r)" />
       <path v-for="(o, i) in map.overlays || []" :key="'o' + i" class="map-overlay" :d="o.d" />
+      </g>
+      <template v-if="map.inset">
+        <svg class="map-inset" :x="map.inset.at[0]" :y="map.inset.at[1]" :width="map.inset.at[2]" :height="map.inset.at[3]" :viewBox="map.inset.from.join(' ')" aria-hidden="true">
+          <rect class="map-inset-bg" :x="map.inset.from[0]" :y="map.inset.from[1]" :width="map.inset.from[2]" :height="map.inset.from[3]" />
+          <use :href="'#' + gid" />
+        </svg>
+        <rect class="map-inset-frame" :x="map.inset.at[0]" :y="map.inset.at[1]" :width="map.inset.at[2]" :height="map.inset.at[3]" />
+        <text class="map-inset-label" :x="map.inset.at[0] + 5" :y="map.inset.at[1] + map.inset.at[3] - 6">{{ map.inset.label }}</text>
+      </template>
     </svg>
     <div v-if="tip && tipValue" class="map-tip" :class="{ flip: tip.flip }" :style="{ left: tip.x + 'px', top: tip.y + 'px' }" role="tooltip">
       <b>{{ tipRegion?.name }}</b> <span class="sub">{{ tipValue.title }}</span>

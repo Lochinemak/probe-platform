@@ -178,12 +178,17 @@ table.grid tr.clickable { cursor: pointer; }
 /* Maps. */
 .result-map { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
 .map-box { position: relative; max-width: 860px; margin: 8px auto 0; }
+.map-box.china { max-width: 640px; } /* nearly square, where the world map is wide */
 .map-box svg { display: block; width: 100%; height: auto; }
-.map-region { fill: var(--map-empty); stroke: var(--bg-2); stroke-width: .6; vector-effect: non-scaling-stroke; outline: none; }
+.map-region { fill: var(--map-empty); stroke: var(--bg); stroke-width: .8; vector-effect: non-scaling-stroke; outline: none; }
 .map-region.has { cursor: pointer; }
 .map-region.has:hover, .map-region.has:focus-visible, .map-region.on { stroke: var(--text); stroke-width: 1.6; }
 .map-other { fill: var(--map-empty); opacity: .6; }
 .map-overlay { fill: none; stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.map-inset { pointer-events: none; }
+.map-inset-bg { fill: var(--bg-2); }
+.map-inset-frame { fill: none; stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.map-inset-label { fill: var(--muted); font-size: 12px; pointer-events: none; }
 .map-dot { stroke: var(--bg-2); stroke-width: 1; vector-effect: non-scaling-stroke; cursor: pointer; }
 .map-dot.on { stroke: var(--text); stroke-width: 1.6; }
 .map-tip { position: absolute; z-index: 5; transform: translate(12px, 12px); pointer-events: none; min-width: 150px; max-width: 260px; padding: 8px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 12.5px; }
