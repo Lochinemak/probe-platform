@@ -2,11 +2,13 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -145,13 +147,15 @@ func (o shareOpts) scrubTask(t *protocol.Task) *protocol.Task {
 			Count: p.Count, IntervalMs: p.IntervalMs, TimeoutMs: p.TimeoutMs, IPVersion: p.IPVersion, Continuous: p.Continuous,
 			PacketSize: p.PacketSize, Method: p.Method, FollowRedirects: p.FollowRedirects, SpeedTest: p.SpeedTest,
 			MaxHops: p.MaxHops, Resolve: p.Resolve, Protocol: p.Protocol, RecordType: p.RecordType,
+			PayloadMode: p.PayloadMode, NoWait: p.NoWait, ExpectCertDays: p.ExpectCertDays,
 		},
 	}
 	if o.target {
 		out.Params.Port = p.Port
 	}
 	if o.ips {
-		out.Params.DNSServer = p.DNSServer
+		// Resolvers and the address a probe was pointed at are addresses too.
+		out.Params.DNSServer, out.Params.DNSServers, out.Params.Resolver, out.Params.ConnectTo = p.DNSServer, p.DNSServers, p.Resolver, p.ConnectTo
 	}
 	if o.time {
 		out.CreatedAt = t.CreatedAt
@@ -265,6 +269,28 @@ func (o shareOpts) scrubDNSAttempt(a protocol.DNSAttempt) protocol.DNSAttempt {
 	return out
 }
 
+func (o shareOpts) scrubTLSAttempt(a protocol.TLSAttempt) protocol.TLSAttempt {
+	a.Error = o.errText(a.Error)
+	return a
+}
+
+// scrubCompareEntry keeps which resolver was asked (a public resolver's
+// address says nothing about the target; the node's own resolver is shown as
+// "system" by name only) and hides the answers as scrubDNSAttempt does. The
+// key resolvers are grouped by is replaced with a digest of itself when the
+// answers are hidden, so "these three agree, that one differs" still shows.
+func (o shareOpts) scrubCompareEntry(e protocol.DNSCompareEntry) protocol.DNSCompareEntry {
+	out := protocol.DNSCompareEntry{Server: e.Server, Label: e.Label, Attempt: o.scrubDNSAttempt(e.Attempt), Key: e.Key}
+	if !o.ips && !strings.EqualFold(e.Server, "system") {
+		out.Attempt.Server = e.Attempt.Server // the public resolver that was named in the request
+	}
+	if !(o.target && o.ips) && e.Key != "" {
+		sum := sha256.Sum256([]byte(e.Key))
+		out.Key = "#" + hex.EncodeToString(sum[:4])
+	}
+	return out
+}
+
 func (o shareOpts) scrubHops(hops []protocol.MTRHop) []protocol.MTRHop {
 	out := make([]protocol.MTRHop, len(hops))
 	for i, h := range hops {
@@ -288,12 +314,57 @@ func (o shareOpts) scrubData(typ protocol.TaskType, raw json.RawMessage) json.Ra
 	}
 	var out any
 	switch typ {
-	case protocol.TaskPing, protocol.TaskTCPing:
+	case protocol.TaskTLS:
+		var d protocol.TLSResult
+		if json.Unmarshal(raw, &d) != nil {
+			return nil
+		}
+		s := protocol.TLSResult{Target: o.name(d.Target), ServerName: o.name(d.ServerName), IP: o.ip(d.IP), Stats: d.Stats,
+			Version: d.Version, Cipher: d.Cipher, ALPN: d.ALPN, Verified: d.Verified, DaysLeft: d.DaysLeft, OCSPStapled: d.OCSPStapled, CertOK: d.CertOK,
+			Attempts: []protocol.TLSAttempt{}}
+		if o.target {
+			s.Port, s.VerifyError = d.Port, d.VerifyError
+		} else if d.VerifyError != "" {
+			s.VerifyError = "certificate verification failed" // the real text names the host
+		}
+		for _, a := range d.Attempts {
+			s.Attempts = append(s.Attempts, o.scrubTLSAttempt(a))
+		}
+		for _, c := range d.Chain {
+			// Who issued a certificate and until when it is valid say little
+			// about whose it is; its subject, names and serial say exactly that.
+			sc := protocol.TLSCert{Issuer: c.Issuer, NotBefore: c.NotBefore, NotAfter: c.NotAfter, KeyType: c.KeyType, SigAlg: c.SigAlg, IsCA: c.IsCA}
+			if o.target {
+				sc.Subject, sc.Serial = c.Subject, c.Serial
+				for _, san := range c.SANs {
+					// A certificate may list the addresses it serves from.
+					if o.ips || net.ParseIP(san) == nil {
+						sc.SANs = append(sc.SANs, san)
+					}
+				}
+			}
+			if !o.target && !c.IsCA {
+				sc.Issuer = "" // a private CA's name gives the organisation away
+			}
+			s.Chain = append(s.Chain, sc)
+		}
+		out = s
+	case protocol.TaskDNSCompare:
+		var d protocol.DNSCompareResult
+		if json.Unmarshal(raw, &d) != nil {
+			return nil
+		}
+		s := protocol.DNSCompareResult{Target: o.name(d.Target), RecordType: d.RecordType, Verdict: d.Verdict, Groups: d.Groups, Entries: []protocol.DNSCompareEntry{}}
+		for _, e := range d.Entries {
+			s.Entries = append(s.Entries, o.scrubCompareEntry(e))
+		}
+		out = s
+	case protocol.TaskPing, protocol.TaskTCPing, protocol.TaskUDP:
 		var d protocol.PingResult
 		if json.Unmarshal(raw, &d) != nil {
 			return nil
 		}
-		s := protocol.PingResult{Target: o.name(d.Target), IP: o.ip(d.IP), Stats: d.Stats, Replies: []protocol.Reply{}}
+		s := protocol.PingResult{Target: o.name(d.Target), IP: o.ip(d.IP), Proto: d.Proto, Stats: d.Stats, Replies: []protocol.Reply{}}
 		if o.target {
 			s.Port = d.Port
 		}
@@ -353,7 +424,19 @@ func (o shareOpts) scrubProgress(typ protocol.TaskType, p protocol.Progress) (pr
 			return out, false
 		}
 		v, out.Geo = o.ip(ip), p.Geo
-	case p.Kind == "reply" && (typ == protocol.TaskPing || typ == protocol.TaskTCPing):
+	case p.Kind == "attempt" && typ == protocol.TaskTLS:
+		var a protocol.TLSAttempt
+		if json.Unmarshal(p.Data, &a) != nil {
+			return out, false
+		}
+		v = o.scrubTLSAttempt(a)
+	case p.Kind == "entry" && typ == protocol.TaskDNSCompare:
+		var e protocol.DNSCompareEntry
+		if json.Unmarshal(p.Data, &e) != nil {
+			return out, false
+		}
+		v = o.scrubCompareEntry(e)
+	case p.Kind == "reply" && (typ == protocol.TaskPing || typ == protocol.TaskTCPing || typ == protocol.TaskUDP):
 		var r protocol.Reply
 		if json.Unmarshal(p.Data, &r) != nil {
 			return out, false
@@ -495,6 +578,10 @@ func (a *API) createShare(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if snap.Task.Type == protocol.TaskStatus {
+		writeErr(w, http.StatusBadRequest, "节点状态的结果不能分享")
 		return
 	}
 	existing, err := a.store.ListShares(id)

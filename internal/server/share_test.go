@@ -61,6 +61,26 @@ func canaryResult(typ protocol.TaskType) *protocol.AgentResult {
 		}}
 		r.Data = mustJSON(protocol.DNSResult{Target: cTarget, RecordType: "A", Attempts: []protocol.DNSAttempt{a}})
 		prog("attempt", a)
+	case protocol.TaskUDP:
+		reply := protocol.Reply{Seq: 0, OK: false, State: "closed", Error: boom}
+		r.Data = mustJSON(protocol.PingResult{Target: cTarget + ":53", IP: cIP, Port: 8443, Proto: "udp", Replies: []protocol.Reply{reply}})
+		prog("reply", reply)
+	case protocol.TaskTLS:
+		a := protocol.TLSAttempt{Seq: 0, OK: false, Error: boom}
+		r.Data = mustJSON(protocol.TLSResult{Target: cTarget, ServerName: cTarget, IP: cIP, Port: 8443, Attempts: []protocol.TLSAttempt{a},
+			VerifyError: "x509: certificate is valid for other.example, not " + cTarget, DaysLeft: 30,
+			Chain: []protocol.TLSCert{
+				{Subject: "CN=" + cTarget, Issuer: "CN=Internal CA of " + cTarget, SANs: []string{cTarget, cIP}, Serial: "c0ffee"},
+				{Subject: "CN=Internal CA of " + cTarget, Issuer: "CN=Public Root", IsCA: true},
+			}})
+		prog("attempt", a)
+	case protocol.TaskDNSCompare:
+		e := protocol.DNSCompareEntry{Server: "system", Label: "系统 DNS", Key: cIP, Attempt: protocol.DNSAttempt{OK: true, Error: boom, Server: cIP + ":53", Proto: "udp", RCode: "Success",
+			Answers: []protocol.DNSAnswer{{Name: cTarget + ".", Type: "A", Value: cIP}, {Name: cTarget + ".", Type: "CNAME", Value: "cdn." + cTarget + "."}}}}
+		r.Data = mustJSON(protocol.DNSCompareResult{Target: cTarget, RecordType: "A", Entries: []protocol.DNSCompareEntry{e}, Verdict: "consistent", Groups: 1})
+		prog("entry", e)
+	case protocol.TaskStatus:
+		r.Data = mustJSON(protocol.StatusResult{Hostname: cSecret + "-host", Nameservers: []string{cIP}, DiskPath: "/volume1/" + cSecret})
 	case protocol.TaskMTR:
 		hops := []protocol.MTRHop{{TTL: 1, Hosts: []string{cIP}, Names: []string{cRDNS}, Geo: []string{"中国 广东省"}, Sent: 3, Received: 3, Reached: true}}
 		r.Data = mustJSON(protocol.MTRResult{Target: cTarget, IP: cIP, Protocol: "tcp", Port: 8443, Hops: hops, Reached: true, Rounds: 3})
@@ -75,8 +95,12 @@ func canaryResult(typ protocol.TaskType) *protocol.AgentResult {
 // it is passed through unscrubbed, so the scrubbers are written as rebuilds:
 // what they do not copy does not exist.
 func TestShareRedactionCanary(t *testing.T) {
-	types := []protocol.TaskType{protocol.TaskPing, protocol.TaskTCPing, protocol.TaskHTTP, protocol.TaskDNS, protocol.TaskMTR}
-	for _, typ := range types {
+	// Every task type there is: one added without a scrubber fails here on
+	// "what a share always carries" or, if it leaks, on the canaries.
+	for _, typ := range protocol.TaskTypes {
+		if typ == protocol.TaskStatus {
+			continue // never shared; checked below
+		}
 		for mask := 0; mask < 16; mask++ {
 			o := shareOpts{target: mask&1 != 0, time: mask&2 != 0, ips: mask&4 != 0, nodes: mask&8 != 0}
 			in := &protocol.Event{Type: "snapshot", Task: canaryTask(typ), Results: []*protocol.AgentResult{canaryResult(typ)}, Done: true}
@@ -112,6 +136,11 @@ func TestShareRedactionCanary(t *testing.T) {
 		Progress: []protocol.Progress{{Kind: "attempt", Data: json.RawMessage(`{"x":"` + cSecret + `"}`)}}}
 	if got := string(mustJSON(o.scrubResult(protocol.TaskType("future"), unknown, "n1"))); strings.Contains(got, cSecret) {
 		t.Errorf("unknown task type passed through: %s", got)
+	}
+	// A node's own status is not something to share: the payload is dropped.
+	st := canaryResult(protocol.TaskStatus)
+	if got := string(mustJSON(o.scrubResult(protocol.TaskStatus, st, "n1"))); strings.Contains(got, "hostname") || strings.Contains(got, cSecret) {
+		t.Errorf("status payload shared: %s", got)
 	}
 	// A mangled payload is dropped, not echoed.
 	if got := o.scrubData(protocol.TaskPing, json.RawMessage(`"`+cSecret+`"`)); got != nil {

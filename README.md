@@ -9,6 +9,10 @@
 | **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
 | **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
 | **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
+| **UDP 探测** | 向 UDP 端口发一个数据报：收到回应、收到「端口不可达」还是没有任何响应；53 端口自动发 DNS 查询 |
+| **TLS 证书** | 握手耗时、协议版本与套件、ALPN、完整证书链（主体、适用名称、签发者、有效期、密钥类型）、在节点信任库里是否校验通过、剩余天数。证书过期或自签也能拿到证书链 |
+| **DNS 对比** | 每个节点同时问多个解析器（系统 DNS、阿里、腾讯、Cloudflare…），看答案是否一致，不一致时按答案分组 |
+| **节点状态** | 节点自身的系统、内核、运行时长、负载、内存、磁盘、agent 版本、系统 DNS。仅管理员可用，不能分享、不能做定时监控 |
 | **定时监控 + 告警** | 按 30 秒到 24 小时的间隔持续拨测，结果入库并绘制各节点延迟 / 丢包趋势图；阈值 + 连续失败次数触发告警，恢复时再通知；Telegram / 企业微信 / 钉钉 / Bark / PushDeer / Gotify / Webhook / 邮件 |
 
 ## 架构
@@ -133,6 +137,11 @@ docker run -d --name probe-agent --restart unless-stopped \
 probe-agent test www.qq.com         # 依次跑 ping / tcping / http / mtr 并打印 JSON
 probe-agent test mtr 1.1.1.1 protocol=tcp port=443   # 参数用 key=value 追加
 probe-agent test dns www.qq.com dns_server=223.5.5.5
+probe-agent test tls www.qq.com                       # 握手与证书链
+probe-agent test udp 223.5.5.5:53 count=3
+probe-agent test dns_compare www.qq.com dns_servers=system,223.5.5.5,1.1.1.1
+probe-agent test tcping www.qq.com port=443 connect_to=1.2.3.4   # 指定连接 IP
+probe-agent test status                               # 本机状态，不需要目标
 sudo /var/lib/probe-agent/probe-agent test www.qq.com   # 已用 systemd 安装的机器
 & 'C:\ProgramData\probe-agent\probe-agent.exe' test www.qq.com   # Windows（PowerShell）
 ```
@@ -227,7 +236,7 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 
 | 地址 | 页面 |
 | --- | --- |
-| `/ping` `/tcping` `/http` `/dns` `/mtr` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
+| `/ping` `/tcping` `/http` `/udp` `/dns` `/mtr` `/tls` `/dns_compare` `/status` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
 | `/t/<任务 ID>` | 某一次检测的结果：进行中的实时更新，结束的从历史读取，表单同时回填成当时的参数。游客只能打开自己发起的 |
 | `/s/<分享码>` | 分享出去的检测结果：只读，不用登录就能打开（关闭了游客访问也一样），见下面「分享与截图」 |
 | `/coverage` | 节点覆盖：节点分布地图（有在线节点 / 全部离线 / 暂无节点）、点击地区看那里各线路的在线情况、地区排行、线路汇总 |
@@ -337,6 +346,12 @@ curl -H "Authorization: Bearer <节点 token>" localhost:8080/api/agent/download
 | `expect_status` / `expect_keyword` / `expect_max_ms` | http | 断言：状态码（0 = 任意 < 400）、响应体关键字、总耗时上限 |
 | `speed_test` / `speed_seconds` | http | 下载测速：持续读取指定秒数（默认 5）并计算 Mbps |
 | `record_type` / `dns_server` | dns | 记录类型（默认 A）；服务器留空用节点系统 DNS，可填 `223.5.5.5`、`223.5.5.5:53`、`tcp://1.1.1.1`、`https://doh.pub/dns-query` |
+| `connect_to` | ping / tcping / http / mtr / udp / tls | 指定连接 IP（或主机名）：节点直接连这个地址，HTTP 的 Host、TLS 的 SNI 和证书校验仍然用目标域名（相当于 `curl --connect-to`）。用来测某一台源站或某个 CDN 节点 |
+| `resolver` | 同上 | 节点解析目标时用哪个 DNS，写法同 `dns_server`；留空用节点的系统 DNS |
+| `user_agent` / `referer` / `cookie` | http | 常用请求头的快捷写法；游客只能设 `user_agent` |
+| `payload_mode` / `payload` / `query_name` / `no_wait` | udp | 发什么：`auto`（53 端口发 DNS 查询，否则发文本）、`dns`、`text`；文本内容（默认 `probe`，≤1024 字节）；DNS 查询的域名；`no_wait` 只测试能否发出 |
+| `expect_cert_days` | tls | 证书剩余天数低于此值算失败，0 不检查 |
+| `dns_servers` | dns_compare | 要对比的解析器列表（≤8），`system` 表示节点自己的系统 DNS |
 
 ## 项目结构
 
@@ -373,7 +388,7 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 登录相关的配置都在 Dashboard 的「设置」页（管理员可见）修改，保存后立即生效、无需重启；环境变量只作为首次启动的引导值，页面里保存过的项以数据库为准。
 
 - **未配置任何登录方式**（既没有密码也没有 Logto）：开放模式，所有人都是管理员，只适合内网。首次部署请用 `PROBE_ADMIN_PASSWORD` 提供一个引导密码，登录后在「设置 → 管理员密码」里改成自己的（保存为 bcrypt 哈希，之后环境变量里的密码就不再起作用，可以删掉）。
-- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、地域与线路（省份 / 城市 / 线路类别）、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：**目标必须是公网地址**（内网、回环、CGNAT、云元数据 169.254.169.254 等一律拒绝，域名解析到这些地址也拒绝）；HTTP 只能 GET / HEAD，不能自定义请求头和请求体，不能关闭证书校验；DNS 指定的服务器必须是公网地址且只能用 53 端口（DoH 必须 https）；每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次，不能用下载测速；持续检测最多 60 次、总时长不超过 60 秒，且同一游客同时只能运行一个。管理员不受这些限制，仍可探测自己的内网。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
+- **配置了登录方式**：匿名访客是**游客**，可以发起拨测、看实时结果，节点列表只显示名称、位置、运营商、地域与线路（省份 / 城市 / 线路类别）、能力；看不到公网 IP、版本、接入命令，也不能进「监控」「通知」「设置」页。「历史」页只显示**本浏览器**发起过的拨测：游客第一次发起拨测时会得到一枚一年有效的匿名 Cookie（`probe_guest`）作为身份，换浏览器、清 Cookie 或者知道任务 ID 也看不到别人的记录。游客发起拨测有限制：**目标必须是公网地址**（内网、回环、CGNAT、云元数据 169.254.169.254 等一律拒绝，域名解析到这些地址也拒绝）；HTTP 只能 GET / HEAD，不能自定义请求头和请求体，不能关闭证书校验；DNS 指定的服务器必须是公网地址且只能用 53 端口（DoH 必须 https）；每 IP 每分钟 10 次，ping/tcping 最多 20 次、HTTP 3 次、MTR 10 轮、DNS 5 次、UDP 5 次、TLS 3 次、DNS 对比最多 6 个解析器，不能用下载测速，不能查看节点状态；持续检测最多 60 次、总时长不超过 60 秒，且同一游客同时只能运行一个。管理员不受这些限制，仍可探测自己的内网。「设置 → 访问控制」可以关闭游客访问，届时所有功能都需要登录。
 - **管理员**：右上角「管理员登录」。登录后「历史」页显示所有人的记录，并多一列「来源」（管理员用户名 / 游客 + 短 ID / 定时监控）。两种方式：
   - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
   - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和管理员名单（逗号分隔的邮箱 / 用户名 / sub；**留空则拒绝所有 Logto 登录**——Logto 租户通常允许自助注册，把空名单当成「所有人都是管理员」等于把后台交给任何愿意注册的人），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
@@ -385,7 +400,9 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 - Dashboard 能让任意在线节点向任意目标发包，**公网部署必须配置管理员登录并使用 HTTPS**。
 - **游客只能探测公网目标。** agent 往往跑在别人家的内网和 dashboard 自己所在的云主机上，若不限制，未登录的访客就能借节点读取云元数据、扫内网端口、访问路由器和 NAS 后台。限制分两层：server 在建任务前校验目标（字面量地址直接判断，域名会解析后逐个判断，有一个内网地址就拒绝），agent 在真正连接的地址上再判一次（`public_only`，HTTP 连每一次重定向都查，因此改不动的 DNS 重绑定也无效）。判定标准见 `internal/probe/netpolicy.go`：回环、RFC 1918、链路本地（含 169.254.169.254）、CGNAT、组播、198.18/15、文档与保留网段全部算内网。管理员不受此限。
 - **反向代理后请确认 `PROBE_PROXY_HOPS`。** `X-Forwarded-For` 是客户端起头、每层代理追加的列表，所以只有自己的代理追加的那几个条目可信。server 默认按一层代理取倒数第一个；如果照抄 `deploy/nginx.conf.example`（`proxy_add_x_forwarded_for`）就不用改。取错方向会让登录爆破限制和游客频率限制被一个请求头绕过，审计日志里的 IP 也会是伪造的。
-- agent 只接受 server 下发的五种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB）。
+- agent 只接受 server 下发的九种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB、UDP 负载 ≤ 1024 字节、DNS 对比 ≤ 8 个解析器）。
+- **server 只把 agent 声明支持的东西发给它。** UDP / TLS / DNS 对比 / 节点状态和 `connect_to` / `resolver` 两个参数需要较新的 agent；版本过旧的节点（通常是还没重新拉镜像的 Docker 节点）会直接得到「节点版本过旧」的失败结果，而不是忽略新参数、把一次测错了对象的结果当成正常结果交回来。拨测页里这类节点会置灰并写明原因。
+- **游客的参数是白名单。** 每种探测类型只把游客允许使用的参数逐个抄过去，新加的参数默认对游客无效；没有专门写过游客校验的探测类型会被拒绝。游客的 UDP 探测只能发送内置的 DNS 查询或固定文本，不能自定义负载；`connect_to` 和 `resolver` 同样必须是公网地址。
 - **agent 自更新只在可信连接上进行。** 更新提供的 SHA-256 和二进制来自同一条连接，只能防传输损坏，防不了恶意服务端；因此 server 地址是明文 http（回环除外）或开了 `PROBE_INSECURE=true` 时，agent 会拒绝自更新——否则路径上的人就能投递一个以 root / LocalSystem 运行的二进制。
 - **通知渠道的密钥只写不读。** Bot token、SMTP 密码、Webhook 认证头等不会通过 API 返回，页面上只显示「已保存」；保存时留空表示不修改。
 - ip-api.com 的免费接口不支持 HTTPS，所以位置识别改成**先查离线库**，只有查不到才走那次明文请求（`PROBE_GEOIP_ONLINE=false` 可完全关闭）。建议用 `make geoip-db` 下好离线库。

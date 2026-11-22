@@ -63,6 +63,48 @@ describe('derive', () => {
   })
 })
 
+describe('derive for the newer probes', () => {
+  it('reads a udp result like a ping, and says why nothing came back', () => {
+    const udp = { type: 'udp', target: '1.1.1.1:53', params: {} }
+    const okr = derive(udp, { status: 'done', data: { ip: '1.1.1.1', port: 53, proto: 'udp', replies: [{ seq: 0, ok: true, state: 'reply', rtt_ms: 8 }], stats: { sent: 1, received: 1, avg_ms: 8 } } })
+    expect(okr).toMatchObject({ metric: 8, failed: false, ip: '1.1.1.1', port: 53 })
+    const closed = derive(udp, { status: 'done', data: { ip: '1.1.1.1', replies: [{ seq: 0, ok: false, state: 'closed', error: 'port unreachable' }], stats: { sent: 1, received: 0 } } })
+    expect(closed).toMatchObject({ failed: true, statusText: '端口关闭', timedOut: false })
+    const silent = derive(udp, { status: 'done', data: { ip: '1.1.1.1', replies: [{ seq: 0, ok: false, state: 'no_reply', error: 'no reply' }], stats: { sent: 1, received: 0 } } })
+    expect(silent).toMatchObject({ failed: true, statusText: '无响应', timedOut: true })
+  })
+  it('reads a TLS result: handshake, certificate, verification', () => {
+    const tls = { type: 'tls', target: 'example.com', params: { expect_cert_days: 30 } }
+    const chain = [{ subject: 'CN=example.com', issuer: 'CN=R3', not_after: '2027-01-01T00:00:00Z' }]
+    const base = { ip: '93.184.216.34', port: 443, attempts: [{ seq: 0, ok: true, handshake_ms: 40, connect_ms: 10 }], stats: { sent: 1, received: 1, avg_ms: 40 }, chain, version: 'TLS 1.3' }
+    expect(derive(tls, { status: 'done', data: { ...base, verified: true, cert_ok: true, days_left: 90 } })).toMatchObject({ metric: 40, failed: false, statusText: '完成', ip: '93.184.216.34' })
+    expect(derive(tls, { status: 'done', data: { ...base, verified: false, verify_error: 'certificate has expired', cert_ok: true, days_left: -3 } })).toMatchObject({ failed: true, statusText: '证书无效', errorKind: 'tls' })
+    expect(derive(tls, { status: 'done', data: { ...base, verified: true, cert_ok: false, days_left: 12 } })).toMatchObject({ failed: true, statusText: '即将到期' })
+    expect(derive(tls, { status: 'done', data: { ip: '1.2.3.4', attempts: [{ seq: 0, ok: false, error: 'timeout' }], stats: { sent: 1, received: 0 } } })).toMatchObject({ failed: true, statusText: '超时', metric: undefined })
+    // Still running: the attempts come from progress and there is no certificate yet.
+    expect(derive(tls, { status: 'running', progress: [{ kind: 'resolved', data: '1.2.3.4' }, { kind: 'attempt', data: { seq: 0, ok: true, handshake_ms: 30 } }] })).toMatchObject({ live: true, metric: 30, ip: '1.2.3.4', leaf: null, failed: false })
+  })
+  it('groups a DNS comparison by answer, the majority first', () => {
+    const cmp = { type: 'dns_compare', target: 'example.com', params: {} }
+    const entry = (server, key, extra = {}) => ({ server, key, attempt: { ok: true, rtt_ms: 10, answers: key.split(',').map((v) => ({ type: 'A', value: v, geo: 'x' })), ...extra } })
+    const entries = [entry('system', '1.1.1.1'), entry('223.5.5.5', '2.2.2.2', { rtt_ms: 25 }), entry('8.8.8.8', '1.1.1.1'), { server: '9.9.9.9', key: '', attempt: { ok: false, error: 'timeout', answers: [] } }]
+    const r = derive(cmp, { status: 'done', data: { entries, verdict: 'inconsistent', groups: 2 } })
+    expect(r).toMatchObject({ verdict: 'inconsistent', groups: 2, metric: 25, failed: false })
+    expect(r.groupOf).toEqual({ '1.1.1.1': 1, '2.2.2.2': 2 })
+    expect(r.ips.map((x) => x.ip)).toEqual(['1.1.1.1', '2.2.2.2'])
+    // From progress alone the verdict is worked out here.
+    const live = derive(cmp, { status: 'done', progress: entries.slice(0, 1).concat(entries.slice(2, 3)).map((data) => ({ kind: 'entry', data })) })
+    expect(live).toMatchObject({ verdict: 'consistent', groups: 1 })
+    expect(derive(cmp, { status: 'done', data: { entries: [entries[3]], verdict: 'failed', groups: 0 } })).toMatchObject({ failed: true, statusText: '超时' })
+  })
+  it('passes a node status through', () => {
+    const r = derive({ type: 'status', target: 'self', params: {} }, { status: 'done', data: { os: 'linux', cpus: 4, load: [0.5, 0.4, 0.3] } })
+    expect(r).toMatchObject({ failed: false, statusText: '完成', metric: undefined })
+    expect(r.sys.cpus).toBe(4)
+    expect(r.ips).toEqual([])
+  })
+})
+
 describe('errorCategory', () => {
   it('prefers the specific cause', () => {
     const k = (m) => errorCategory(m).key

@@ -62,3 +62,24 @@ describe('validateTarget', () => {
     bad('http', 'https://', '')
   })
 })
+
+describe('validateTarget for the newer probes', () => {
+  it('udp needs a port, from the target or the port box', () => {
+    expect(ok('udp', '8.8.8.8:53')).toMatchObject({ target: '8.8.8.8:53', port: 53 })
+    expect(ok('udp', 'example.com', { port: 53 })).toMatchObject({ target: 'example.com', port: 0 })
+    bad('udp', 'example.com', 'host:port')
+    bad('udp', 'udp://example.com:53', '不要包含协议')
+  })
+  it('tls takes a host, host:port or a pasted https address', () => {
+    expect(ok('tls', 'example.com')).toMatchObject({ target: 'example.com', port: 0 })
+    expect(ok('tls', 'example.com:8443').port).toBe(8443)
+    expect(ok('tls', 'https://example.com/').target).toBe('example.com')
+    bad('tls', 'https://example.com/path', '路径')
+    bad('tls', 'http://example.com', '不要包含协议')
+  })
+  it('dns_compare takes a bare name and status no target at all', () => {
+    expect(ok('dns_compare', 'example.com').target).toBe('example.com')
+    bad('dns_compare', 'example.com:53', '不能包含端口')
+    expect(validateTarget('status', '')).toEqual({ ok: true, target: 'self' })
+  })
+})

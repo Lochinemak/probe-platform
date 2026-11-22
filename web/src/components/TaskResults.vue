@@ -15,6 +15,9 @@ import PingTable from './PingTable.vue'
 import HttpTable from './HttpTable.vue'
 import MtrView from './MtrView.vue'
 import DnsTable from './DnsTable.vue'
+import TlsTable from './TlsTable.vue'
+import DnsCompareTable from './DnsCompareTable.vue'
+import StatusTable from './StatusTable.vue'
 import ShareDialog from './ShareDialog.vue'
 import ScreenshotDialog from './ScreenshotDialog.vue'
 import { fmtTime } from '../fmt.js'
@@ -49,18 +52,21 @@ const finishedCount = computed(() => rows.value.filter((r) => r.finished).length
     <ResultHeader :task="task" :rows="shown.length ? shown : filtered" :results="results" :running="running" :zen="zen" :share="share"
       @update:zen="emit('update:zen', $event)" @share="sharing = true" @screenshot="shooting = true" />
     <MetricCards :task="task" :rows="filtered" />
-    <div class="legend lat-legend" aria-label="延迟色阶">
+    <div class="legend lat-legend" aria-label="延迟色阶" v-if="task.type !== 'status'">
       <span class="sub">{{ isHTTP ? '请求耗时' : '延迟' }}</span>
       <span v-for="(label, i) in scale.labels" :key="i"><i :class="'lat-bg-' + i"></i>{{ label }}</span>
       <span><i class="lat-bg-x"></i>超时 / 无数据</span>
       <span class="sub" v-if="isHTTP">HTTP 耗时是整个请求（解析、连接、TLS、等待首字节、下载）的时间，不是链路往返延迟。</span>
     </div>
-    <ResultMap :task="task" :rows="rows" :selected="filter.map" @select="filter = { ...filter, map: $event }" />
-    <IpSummary v-if="task.type !== 'mtr'" :rows="rows" :selected="filter.ip" @select="filter = { ...filter, ip: $event }" />
+    <ResultMap v-if="task.type !== 'status'" :task="task" :rows="rows" :selected="filter.map" @select="filter = { ...filter, map: $event }" />
+    <IpSummary v-if="task.type !== 'mtr' && task.type !== 'status'" :rows="rows" :selected="filter.ip" @select="filter = { ...filter, ip: $event }" />
     <ResultFilters class="no-shot" v-model="filter" :rows="rows" />
     <div class="empty" v-if="rows.length && !filtered.length">没有符合当前筛选的节点。</div>
     <div v-else class="shot-detail">
-      <PingTable v-if="task.type === 'ping' || task.type === 'tcping'" :task="task" :results="filtered" @order="shown = $event" />
+      <PingTable v-if="task.type === 'ping' || task.type === 'tcping' || task.type === 'udp'" :task="task" :results="filtered" @order="shown = $event" />
+      <TlsTable v-else-if="task.type === 'tls'" :task="task" :results="filtered" @order="shown = $event" />
+      <DnsCompareTable v-else-if="task.type === 'dns_compare'" :task="task" :results="filtered" @order="shown = $event" />
+      <StatusTable v-else-if="task.type === 'status'" :task="task" :results="filtered" @order="shown = $event" />
       <HttpTable v-else-if="task.type === 'http'" :task="task" :results="filtered" @order="shown = $event" />
       <MtrView v-else-if="task.type === 'mtr'" :task="task" :results="filtered" />
       <DnsTable v-else-if="task.type === 'dns'" :task="task" :results="filtered" @order="shown = $event" />

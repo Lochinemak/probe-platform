@@ -33,7 +33,7 @@ function blank() {
     params: {
       count: 5, timeout_ms: 2000, interval_ms: '', packet_size: '', port: 80, ip_version: '',
       method: 'GET', follow_redirects: true, insecure_tls: false, body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0,
-      max_hops: 30, resolve: false, protocol: 'icmp', record_type: 'A', dns_server: '',
+      max_hops: 30, resolve: false, protocol: 'icmp', record_type: 'A', dns_server: '', expect_cert_days: 0,
     },
     alert: { enabled: true, loss_pct: 50, latency_ms: 0, consecutive: 2 },
     notify_ids: [],
@@ -64,7 +64,9 @@ function cleanParams(e) {
     http: ['count', 'timeout_ms', 'method', 'follow_redirects', 'insecure_tls', 'body', 'expect_status', 'expect_keyword', 'expect_max_ms', 'ip_version'],
     mtr: ['count', 'timeout_ms', 'max_hops', 'protocol', 'port', 'resolve', 'ip_version'],
     dns: ['count', 'timeout_ms', 'record_type', 'dns_server', 'ip_version'],
-  }[e.type]
+    udp: ['count', 'timeout_ms', 'interval_ms', 'port', 'ip_version'],
+    tls: ['count', 'timeout_ms', 'port', 'expect_cert_days', 'ip_version'],
+  }[e.type] || []
   const out = {}
   for (const k of keep) if (p[k] !== '' && p[k] !== null && p[k] !== undefined && p[k] !== false && p[k] !== 0) out[k] = p[k]
   if (e.type === 'mtr' && out.protocol === 'icmp') delete out.port
@@ -119,7 +121,7 @@ onBeforeUnmount(() => clearInterval(timer))
           <div class="row" style="gap:16px">
             <div class="field"><label>名称</label><input type="text" v-model="editing.name" placeholder="默认用目标" /></div>
             <div class="field"><label>类型</label>
-              <select v-model="editing.type"><option v-for="t in ['ping', 'tcping', 'http', 'mtr', 'dns']" :key="t" :value="t">{{ typeLabel[t] }}</option></select>
+              <select v-model="editing.type"><option v-for="t in ['ping', 'tcping', 'http', 'mtr', 'dns', 'udp', 'tls']" :key="t" :value="t">{{ typeLabel[t] }}</option></select>
             </div>
             <div class="field grow"><label>目标</label><input type="text" v-model="editing.target" class="mono" required spellcheck="false" /></div>
             <div class="field"><label>间隔</label>
@@ -133,7 +135,8 @@ onBeforeUnmount(() => clearInterval(timer))
             <div class="field" v-if="['ping', 'tcping'].includes(editing.type)"><label>间隔 (ms)</label><input type="number" min="100" max="5000" v-model.number="editing.params.interval_ms" placeholder="默认 500" /></div>
             <div class="field"><label>超时 (ms)</label><input type="number" min="200" max="60000" v-model.number="editing.params.timeout_ms" /></div>
             <div class="field" v-if="editing.type === 'ping'"><label>包大小</label><input type="number" min="24" max="1400" v-model.number="editing.params.packet_size" placeholder="默认 56" /></div>
-            <div class="field" v-if="editing.type === 'tcping'"><label>端口</label><input type="number" min="1" max="65535" v-model.number="editing.params.port" /></div>
+            <div class="field" v-if="['tcping', 'udp', 'tls'].includes(editing.type)"><label>端口{{ editing.type === 'tls' ? '（默认 443）' : '' }}</label><input type="number" min="1" max="65535" v-model.number="editing.params.port" /></div>
+            <div class="field" v-if="editing.type === 'tls'"><label>证书剩余天数低于此值告警（0 不检查）</label><input type="number" min="0" max="3650" v-model.number="editing.params.expect_cert_days" /></div>
             <template v-if="editing.type === 'http'">
               <div class="field"><label>方法</label><select v-model="editing.params.method"><option v-for="m in ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']" :key="m">{{ m }}</option></select></div>
               <div class="field"><label>期望状态码 (0 = &lt; 400)</label><input type="number" min="0" max="599" v-model.number="editing.params.expect_status" /></div>

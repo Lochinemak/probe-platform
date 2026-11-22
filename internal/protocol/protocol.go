@@ -16,16 +16,61 @@ const (
 	TaskHTTP   TaskType = "http"
 	TaskMTR    TaskType = "mtr"
 	TaskDNS    TaskType = "dns"
+	// TaskUDP sends one datagram per attempt and reports whether anything
+	// came back. TaskTLS performs a handshake and reports the certificate
+	// chain. TaskDNSCompare asks several resolvers the same question from one
+	// node. TaskStatus reports the node's own load, memory and disk; it has
+	// no target.
+	TaskUDP        TaskType = "udp"
+	TaskTLS        TaskType = "tls"
+	TaskDNSCompare TaskType = "dns_compare"
+	TaskStatus     TaskType = "status"
 )
+
+// TaskTypes lists every task type.
+var TaskTypes = []TaskType{TaskPing, TaskTCPing, TaskHTTP, TaskMTR, TaskDNS, TaskUDP, TaskTLS, TaskDNSCompare, TaskStatus}
 
 // Valid reports whether t is a known task type.
 func (t TaskType) Valid() bool {
+	for _, k := range TaskTypes {
+		if t == k {
+			return true
+		}
+	}
+	return false
+}
+
+// Monitorable reports whether a scheduled monitor can use t: its result has
+// to collapse into the monitor's latency / loss / ok sample.
+func (t TaskType) Monitorable() bool {
 	switch t {
-	case TaskPing, TaskTCPing, TaskHTTP, TaskMTR, TaskDNS:
+	case TaskPing, TaskTCPing, TaskHTTP, TaskMTR, TaskDNS, TaskUDP, TaskTLS:
 		return true
 	}
 	return false
 }
+
+// Capability is what an agent must report (Hello.Capabilities) to be given
+// tasks of type t, "" for the types every agent has always had. A node that
+// lacks it is failed by the server instead of being sent something it would
+// not understand.
+func (t TaskType) Capability() string {
+	switch t {
+	case TaskUDP:
+		return "udp"
+	case TaskTLS:
+		return "tls"
+	case TaskDNSCompare:
+		return "dns_multi"
+	case TaskStatus:
+		return "status"
+	}
+	return ""
+}
+
+// CapResolver is the capability for Params.ConnectTo and Params.Resolver. An
+// agent without it would silently ignore both and measure the wrong thing.
+const CapResolver = "resolver"
 
 // Message is the envelope for every WebSocket frame between agent and server.
 type Message struct {
@@ -146,6 +191,34 @@ type Params struct {
 	// dns
 	RecordType string `json:"record_type,omitempty"` // A (default), AAAA, CNAME, MX, TXT, NS, PTR
 	DNSServer  string `json:"dns_server,omitempty"`  // "" = node's system resolver; ip, ip:port, or https://.../dns-query
+
+	// Where the probe connects (ping, tcping, http, mtr, udp, tls).
+	//
+	// ConnectTo makes the node probe this address or host instead of
+	// resolving the target, like curl --connect-to: the target still supplies
+	// the HTTP Host header, the TLS server name and the name the certificate
+	// is checked against. Resolver makes the node look the target up at this
+	// DNS server (same syntax as DNSServer) instead of its system resolver.
+	// Both need the agent capability CapResolver.
+	ConnectTo string `json:"connect_to,omitempty"`
+	Resolver  string `json:"resolver,omitempty"`
+
+	// http conveniences, applied after Headers.
+	UserAgent string `json:"user_agent,omitempty"`
+	Referer   string `json:"referer,omitempty"`
+	Cookie    string `json:"cookie,omitempty"`
+
+	// udp
+	PayloadMode string `json:"payload_mode,omitempty"` // "" / auto (DNS query on port 53, else text), dns, text
+	Payload     string `json:"payload,omitempty"`      // text mode: what to send (default "probe")
+	QueryName   string `json:"query_name,omitempty"`   // dns mode: name to ask for (default example.com)
+	NoWait      bool   `json:"no_wait,omitempty"`      // only test that the datagram can be sent
+
+	// tls
+	ExpectCertDays int `json:"expect_cert_days,omitempty"` // fail when the certificate expires sooner than this
+
+	// dns_compare
+	DNSServers []string `json:"dns_servers,omitempty"` // resolvers to ask; "system" is the node's own
 }
 
 // Task is a probe request created via the dashboard and dispatched to agents.
@@ -304,7 +377,7 @@ type Stats struct {
 	StdDevMs float64 `json:"stddev_ms"`
 }
 
-// Reply is one ping / tcping sample.
+// Reply is one ping / tcping / udp sample.
 type Reply struct {
 	Seq   int     `json:"seq"`
 	OK    bool    `json:"ok"`
@@ -312,15 +385,112 @@ type Reply struct {
 	TTL   int     `json:"ttl,omitempty"`
 	Size  int     `json:"size,omitempty"`
 	Error string  `json:"error,omitempty"`
+	// State says what a UDP attempt saw: "reply" (a datagram came back),
+	// "closed" (ICMP port unreachable), "no_reply" (nothing within the
+	// timeout: filtered, or a service that does not answer this payload) or
+	// "sent" (NoWait: the datagram left).
+	State string `json:"state,omitempty"`
 }
 
-// PingResult is the payload for TaskPing and TaskTCPing.
+// PingResult is the payload for TaskPing, TaskTCPing and TaskUDP.
 type PingResult struct {
 	Target  string  `json:"target"`
 	IP      string  `json:"ip"`
 	Port    int     `json:"port,omitempty"`
+	Proto   string  `json:"proto,omitempty"` // "udp" for TaskUDP
 	Replies []Reply `json:"replies"`
 	Stats   Stats   `json:"stats"`
+}
+
+// TLSCert is one certificate of a chain as the server presented it.
+type TLSCert struct {
+	Subject   string    `json:"subject"`
+	Issuer    string    `json:"issuer"`
+	SANs      []string  `json:"sans,omitempty"` // DNS names and IP addresses
+	NotBefore time.Time `json:"not_before"`
+	NotAfter  time.Time `json:"not_after"`
+	Serial    string    `json:"serial,omitempty"`
+	KeyType   string    `json:"key_type,omitempty"` // e.g. "ECDSA P-256", "RSA 2048"
+	SigAlg    string    `json:"sig_alg,omitempty"`
+	IsCA      bool      `json:"is_ca,omitempty"`
+}
+
+// TLSAttempt is one TLS handshake.
+type TLSAttempt struct {
+	Seq         int     `json:"seq"`
+	OK          bool    `json:"ok"` // the handshake completed (whatever the certificate says)
+	Error       string  `json:"error,omitempty"`
+	ConnectMs   float64 `json:"connect_ms"`
+	HandshakeMs float64 `json:"handshake_ms"`
+}
+
+// TLSResult is the payload for TaskTLS. The certificate fields describe the
+// last successful handshake.
+type TLSResult struct {
+	Target     string       `json:"target"`
+	ServerName string       `json:"server_name"`
+	IP         string       `json:"ip"`
+	Port       int          `json:"port"`
+	Attempts   []TLSAttempt `json:"attempts"`
+	Stats      Stats        `json:"stats"` // over HandshakeMs
+	Version    string       `json:"version,omitempty"`
+	Cipher     string       `json:"cipher,omitempty"`
+	ALPN       string       `json:"alpn,omitempty"`
+	Chain      []TLSCert    `json:"chain,omitempty"` // leaf first
+	// Verified reports whether the chain validates for ServerName against the
+	// node's trust store right now; VerifyError says why not.
+	Verified    bool   `json:"verified"`
+	VerifyError string `json:"verify_error,omitempty"`
+	// DaysLeft is how long the leaf certificate is still valid, negative once
+	// it has expired.
+	DaysLeft    int  `json:"days_left"`
+	OCSPStapled bool `json:"ocsp_stapled,omitempty"`
+	// CertOK is false when ExpectCertDays was set and DaysLeft is below it.
+	CertOK bool `json:"cert_ok"`
+}
+
+// DNSCompareEntry is one resolver's answer in a comparison.
+type DNSCompareEntry struct {
+	Server  string     `json:"server"`          // as asked for: "system", an address, a DoH URL
+	Label   string     `json:"label,omitempty"` // display name when Server is a well-known resolver
+	Attempt DNSAttempt `json:"attempt"`
+	// Key is the sorted set of answer values, what resolvers are compared by.
+	Key string `json:"key"`
+}
+
+// DNSCompareResult is the payload for TaskDNSCompare.
+type DNSCompareResult struct {
+	Target     string            `json:"target"`
+	RecordType string            `json:"record_type"`
+	Entries    []DNSCompareEntry `json:"entries"`
+	// Verdict: "consistent" (every resolver that answered gave the same set),
+	// "inconsistent", or "failed" (none answered).
+	Verdict string `json:"verdict"`
+	// Groups is how many distinct answer sets there were.
+	Groups int `json:"groups"`
+}
+
+// StatusResult is the payload for TaskStatus: the node's own state.
+type StatusResult struct {
+	Hostname     string    `json:"hostname,omitempty"`
+	OS           string    `json:"os"`
+	Arch         string    `json:"arch"`
+	Platform     string    `json:"platform,omitempty"` // distribution / product name and version
+	Kernel       string    `json:"kernel,omitempty"`
+	GoVersion    string    `json:"go_version,omitempty"`
+	AgentVersion string    `json:"agent_version,omitempty"`
+	UptimeSec    int64     `json:"uptime_sec,omitempty"`
+	CPUs         int       `json:"cpus"`
+	Load         []float64 `json:"load,omitempty"` // 1, 5, 15 minute averages; absent on Windows
+	MemTotal     uint64    `json:"mem_total,omitempty"`
+	MemAvailable uint64    `json:"mem_available,omitempty"`
+	DiskPath     string    `json:"disk_path,omitempty"` // the filesystem the agent lives on
+	DiskTotal    uint64    `json:"disk_total,omitempty"`
+	DiskFree     uint64    `json:"disk_free,omitempty"`
+	Capabilities []string  `json:"capabilities,omitempty"`
+	Nameservers  []string  `json:"nameservers,omitempty"`
+	// Running is how many tasks the agent was executing, this one included.
+	Running int `json:"running,omitempty"`
 }
 
 // HTTPTiming breaks one HTTP request down by phase.

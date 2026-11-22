@@ -11,6 +11,10 @@ const WORDS = {
   http: ['最短请求', '最长请求', '平均请求'],
   dns: ['最短解析', '最长解析', '平均解析'],
   mtr: ['末跳最快', '末跳最慢', '末跳平均'],
+  udp: ['最快响应', '最慢响应', '平均响应'],
+  tls: ['最短握手', '最长握手', '平均握手'],
+  dns_compare: ['最快节点', '最慢节点', '平均解析'],
+  status: ['—', '—', '—'],
 }
 const words = computed(() => WORDS[props.task.type] || WORDS.ping)
 const measured = computed(() => props.rows.filter((r) => r.metric !== undefined && r.metric !== null && !Number.isNaN(r.metric)))
@@ -26,7 +30,8 @@ const who = (r) => (r ? [r.agent_name, r.place].filter(Boolean).join(' · ') : '
 </script>
 
 <template>
-  <div class="metrics">
+  <div class="metrics" :class="{ few: task.type === 'status' }">
+    <template v-if="task.type !== 'status'">
     <div class="metric">
       <div class="stat-label">{{ words[0] }}</div>
       <div class="metric-value" :class="bucketClass(task.type, fastest?.metric)">{{ fastest ? dur(fastest.metric) : '—' }}</div>
@@ -42,6 +47,7 @@ const who = (r) => (r ? [r.agent_name, r.place].filter(Boolean).join(' · ') : '
       <div class="metric-value" :class="bucketClass(task.type, average)">{{ average !== undefined ? dur(average) : '—' }}</div>
       <div class="sub">{{ measured.length }} 个节点有数据</div>
     </div>
+    </template>
     <div class="metric">
       <div class="stat-label">成功率</div>
       <div class="metric-value" :class="{ ok: finished.length && succeeded === finished.length, bad: finished.length && !succeeded }">{{ rate }}</div>

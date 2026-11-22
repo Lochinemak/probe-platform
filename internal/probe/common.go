@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
+
 	"probe-platform/internal/protocol"
 )
 
@@ -125,6 +127,70 @@ func Resolve(ctx context.Context, host, ipVersion string, publicOnly bool) (net.
 		return nil, PrivateTargetError(host, chosen)
 	}
 	return chosen, nil
+}
+
+// ResolveTarget is Resolve with the two per-task overrides applied: with
+// Params.ConnectTo the node goes to that address or host instead of the
+// target's own, and with Params.Resolver the name is looked up at that DNS
+// server instead of the system resolver. Everything Resolve enforces
+// (IP version, fake-IP, the public-only policy) still holds for the result.
+func ResolveTarget(ctx context.Context, host string, p protocol.Params) (net.IP, error) {
+	if c := strings.TrimSpace(p.ConnectTo); c != "" {
+		host = c
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	spec := strings.TrimSpace(p.Resolver)
+	if spec == "" || strings.EqualFold(spec, "system") || net.ParseIP(host) != nil {
+		return Resolve(ctx, host, p.IPVersion, p.PublicOnly)
+	}
+	if host == "" {
+		return nil, errors.New("empty target")
+	}
+	server, proto, err := dnsServer(spec)
+	if err != nil {
+		return nil, err
+	}
+	if p.PublicOnly {
+		if err := checkPublicDNSServer(ctx, server, proto, p.IPVersion); err != nil {
+			return nil, err
+		}
+	}
+	// Without a preference try IPv4 first, as Resolve does.
+	types := []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA}
+	switch p.IPVersion {
+	case "4":
+		types = types[:1]
+	case "6":
+		types = types[1:]
+	}
+	var lastErr error
+	for _, t := range types {
+		a := dnsQuery(ctx, host+".", t, server, proto, 5*time.Second, "", p.PublicOnly)
+		if a.Error != "" {
+			lastErr = fmt.Errorf("resolve %s at %s: %s", host, spec, a.Error)
+			continue
+		}
+		if !a.OK {
+			lastErr = fmt.Errorf("resolve %s at %s: rcode %s", host, spec, a.RCode)
+			continue
+		}
+		want := strings.TrimPrefix(t.String(), "Type")
+		for _, ans := range a.Answers {
+			ip := net.ParseIP(ans.Value)
+			if ans.Type != want || ip == nil {
+				continue
+			}
+			if IsFakeIP(ip) {
+				return nil, FakeIPError(host, ip)
+			}
+			if p.PublicOnly && !IsPublicIP(ip) {
+				return nil, PrivateTargetError(host, ip)
+			}
+			return ip, nil
+		}
+		lastErr = fmt.Errorf("resolve %s at %s: no address", host, spec)
+	}
+	return nil, lastErr
 }
 
 // SplitTarget separates "host:port" (or "[v6]:port") into host and port. If

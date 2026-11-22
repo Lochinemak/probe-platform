@@ -27,6 +27,18 @@ var lookupIP = net.DefaultResolver.LookupIP
 // covers agents running a build older than that policy.
 func validateGuestTarget(ctx context.Context, typ protocol.TaskType, target string, p protocol.Params) error {
 	target = strings.TrimSpace(target)
+	// Where the node is told to connect instead, and whom it is told to ask,
+	// are destinations as much as the target is.
+	if p.ConnectTo != "" {
+		if err := checkPublicHost(ctx, p.ConnectTo); err != nil {
+			return err
+		}
+	}
+	if p.Resolver != "" && !strings.EqualFold(p.Resolver, "system") {
+		if err := checkGuestDNSServer(ctx, p.Resolver); err != nil {
+			return err
+		}
+	}
 	switch typ {
 	case protocol.TaskPing, protocol.TaskMTR:
 		return checkPublicHost(ctx, target)
@@ -53,9 +65,39 @@ func validateGuestTarget(ctx context.Context, typ protocol.TaskType, target stri
 		// The queried name is not a destination; the resolver is. An empty spec
 		// means the node's own resolver, which the visitor does not choose.
 		return checkGuestDNSServer(ctx, p.DNSServer)
+	case protocol.TaskUDP:
+		host, _, err := probe.SplitTarget(target, p.Port)
+		if err != nil {
+			return errors.New("UDP 探测目标必须是 host:port")
+		}
+		return checkPublicHost(ctx, host)
+	case protocol.TaskTLS:
+		host, _, err := probe.SplitTarget(target, def(p.Port, 443))
+		if err != nil {
+			return err
+		}
+		return checkPublicHost(ctx, host)
+	case protocol.TaskDNSCompare:
+		if len(p.DNSServers) > guestCompareServers {
+			return fmt.Errorf("游客最多对比 %d 个解析器", guestCompareServers)
+		}
+		for _, s := range p.DNSServers {
+			if strings.EqualFold(strings.TrimSpace(s), "system") {
+				continue
+			}
+			if err := checkGuestDNSServer(ctx, s); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	// A type this function has not been taught about is refused, not waved
+	// through.
+	return fmt.Errorf("游客不能发起 %s 类型的探测", typ)
 }
+
+// guestCompareServers is how many resolvers a guest may compare at once.
+const guestCompareServers = 6
 
 // checkGuestDNSServer limits a guest-supplied resolver to a public address on
 // the standard DNS port, or a public DNS-over-HTTPS endpoint. Without the port

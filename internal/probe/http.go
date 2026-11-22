@@ -60,7 +60,7 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	// policy cannot be enforced and the task is refused up front with the
 	// explanatory error.
 	if p.PublicOnly {
-		if _, err := Resolve(ctx, u.Hostname(), p.IPVersion, true); err != nil {
+		if _, err := ResolveTarget(ctx, u.Hostname(), p); err != nil {
 			return nil, err
 		}
 	}
@@ -86,6 +86,17 @@ func HTTP(ctx context.Context, target string, p protocol.Params, progress Progre
 	}
 	res.Stats = ComputeStats(len(res.Attempts), rtts)
 	return res, nil
+}
+
+// untraced returns a context that ends when ctx does but carries none of its
+// values, so dials made with it do not fire ctx's httptrace hooks.
+func untraced(ctx context.Context) (context.Context, context.CancelFunc) {
+	out, cancel := context.WithCancel(context.Background())
+	if d, ok := ctx.Deadline(); ok {
+		out, cancel = context.WithDeadline(context.Background(), d)
+	}
+	stop := context.AfterFunc(ctx, cancel)
+	return out, func() { stop(); cancel() }
 }
 
 type phaseClock struct {
@@ -207,9 +218,39 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 			return CheckPublicAddr(address)
 		}
 	}
+	// ConnectTo sends the target's own host somewhere else and Resolver looks
+	// every host of the chain up at a chosen DNS server. Either way the URL,
+	// and with it the Host header and the TLS server name, stays as it is.
+	origHost := ""
+	if u, err := url.Parse(rawURL); err == nil {
+		origHost = u.Hostname()
+	}
 	transport := &http.Transport{
 		Proxy: nil, // always measure the direct path, ignore HTTP_PROXY
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil {
+				q := p
+				if !strings.EqualFold(host, origHost) {
+					q.ConnectTo = "" // a redirect to another host goes where that host is
+				}
+				if q.ConnectTo != "" || (q.Resolver != "" && net.ParseIP(host) == nil) {
+					clock.mu.Lock()
+					clock.dnsStart = time.Now()
+					clock.mu.Unlock()
+					// The lookup gets a context without the request's trace:
+					// its own DNS connection is not the one being measured.
+					rctx, cancel := untraced(ctx)
+					ip, err := ResolveTarget(rctx, host, q)
+					cancel()
+					clock.mu.Lock()
+					clock.dnsDone = time.Now()
+					clock.mu.Unlock()
+					if err != nil {
+						return nil, err
+					}
+					addr = net.JoinHostPort(ip.String(), port)
+				}
+			}
 			return dialer.DialContext(ctx, network, addr)
 		},
 		DisableKeepAlives:     true,
@@ -256,6 +297,11 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 			continue
 		}
 		req.Header.Set(k, v)
+	}
+	for k, v := range map[string]string{"User-Agent": p.UserAgent, "Referer": p.Referer, "Cookie": p.Cookie} {
+		if v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 
 	resp, err := client.Do(req)

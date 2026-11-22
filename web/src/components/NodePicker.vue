@@ -13,6 +13,9 @@ const props = defineProps({
   modelValue: { type: Set, default: () => new Set() },
   type: { type: String, default: 'ping' },
   ipVersion: { type: String, default: '' },
+  // The task uses connect_to or a custom resolver, which older agents would
+  // silently ignore.
+  needResolver: Boolean,
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -23,12 +26,21 @@ const NEEDS = {
   mtr: ['mtr', '没有 raw socket 权限，不能做路由分析'],
   tcping: ['tcp', '不支持 TCP 检测'],
   http: ['http', '不支持 HTTP 检测'],
+  udp: ['udp', 'agent 版本过旧，不支持 UDP 探测'],
+  tls: ['tls', 'agent 版本过旧，不支持 TLS 证书检测'],
+  dns_compare: ['dns_multi', 'agent 版本过旧，不支持 DNS 对比'],
+  status: ['status', 'agent 版本过旧，不支持节点状态'],
 }
 function blocker(a) {
   if (!a.online) return '离线'
   const caps = a.capabilities || []
-  if (!caps.length) return ''
   const need = NEEDS[props.type]
+  // The four newer probes and the two newer parameters exist only in agents
+  // that announce them; the server refuses to send them to any other.
+  const isNew = ['udp', 'tls', 'dns_compare', 'status'].includes(props.type)
+  if (isNew && !caps.includes(need[0])) return need[1]
+  if (props.needResolver && !caps.includes('resolver')) return 'agent 版本过旧，不支持指定连接 IP / 解析 DNS'
+  if (!caps.length) return ''
   if (need && !caps.includes(need[0])) return need[1]
   if (props.ipVersion === '6' && !caps.includes('ipv6')) return '没有 IPv6 出口'
   return ''

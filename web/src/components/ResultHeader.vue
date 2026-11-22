@@ -51,8 +51,8 @@ onBeforeUnmount(() => { clearTimeout(noteTimer); document.removeEventListener('c
     <div class="result-title">
       <span class="badge" :class="task.type">{{ typeLabel[task.type] }}</span>
       <h2>{{ TYPE_INFO[task.type]?.title || task.type }}</h2>
-      <span class="mono target" v-if="task.target" :title="task.target">{{ task.target }}</span>
-      <span class="sub target" v-else>检测目标已隐藏</span>
+      <span class="mono target" v-if="task.target && task.type !== 'status'" :title="task.target">{{ task.target }}</span>
+      <span class="sub target" v-else-if="task.type !== 'status'">检测目标已隐藏</span>
       <span class="badge" v-if="task.params?.continuous" title="持续检测：长时间连续采样">持续 {{ task.params.count }} 次</span>
     </div>
     <div class="result-meta">

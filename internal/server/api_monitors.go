@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -101,6 +102,9 @@ func validateMonitor(m *protocol.Monitor) error {
 	}
 	if !m.Type.Valid() {
 		return errors.New("invalid type")
+	}
+	if !m.Type.Monitorable() {
+		return fmt.Errorf("%s 类型不能用于定时监控", m.Type)
 	}
 	if m.Target == "" || len(m.Target) > 2048 {
 		return errors.New("target is required")

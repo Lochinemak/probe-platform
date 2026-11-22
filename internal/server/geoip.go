@@ -237,7 +237,7 @@ func (g *GeoIP) AnnotateTarget(typ protocol.TaskType, r *protocol.AgentResult) {
 	}
 	ip := ""
 	switch typ {
-	case protocol.TaskPing, protocol.TaskTCPing, protocol.TaskMTR:
+	case protocol.TaskPing, protocol.TaskTCPing, protocol.TaskMTR, protocol.TaskUDP, protocol.TaskTLS:
 		var d struct {
 			IP string `json:"ip"`
 		}

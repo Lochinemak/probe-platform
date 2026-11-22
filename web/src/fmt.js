@@ -33,6 +33,21 @@ export function rttClass(v) {
   return 'bad'
 }
 
+// size shows a byte count in binary units up to terabytes (memory, disks).
+export function size(n) {
+  if (n === undefined || n === null || !(n > 0)) return '-'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return (n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[i]
+}
+
+export function uptime(sec) {
+  if (!(sec > 0)) return '-'
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60)
+  return d ? `${d} 天 ${h} 小时` : h ? `${h} 小时 ${m} 分` : `${m} 分钟`
+}
+
 export function bytes(n) {
   if (n === undefined || n === null || n < 0) return '-'
   if (n < 1024) return n + ' B'
@@ -58,7 +73,7 @@ export function timeAgo(iso) {
   return `${Math.floor(diff / 86400)} 天前`
 }
 
-export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR', dns: 'DNS' }
+export const typeLabel = { ping: 'PING', tcping: 'TCPING', http: 'HTTP', mtr: 'MTR', dns: 'DNS', udp: 'UDP', tls: 'TLS', dns_compare: 'DNS 对比', status: '节点状态' }
 
 export function mbps(v) {
   if (v === undefined || v === null) return '-'
@@ -79,12 +94,14 @@ const ERROR_KINDS = [
   ['policy', '目标受限', ['不是公网地址', 'not a public address', 'public_only']],
   ['dns', 'DNS 失败', ['no such host', 'nxdomain', 'lookup ', 'server misbehaving', 'no answer', 'rcode']],
   ['tls', 'TLS 失败', ['certificate', 'x509', 'tls:', 'tls handshake', 'handshake failure']],
+  ['closed', '端口关闭', ['port unreachable']],
   ['refused', '端口拒绝', ['connection refused', 'refused']],
   ['reset', '连接重置', ['connection reset', 'reset by peer', 'broken pipe', 'unexpected eof']],
   ['unreachable', '网络不可达', ['network is unreachable', 'no route to host', 'unreachable']],
   ['connect_timeout', '连接超时', ['dial tcp', 'connect: ', 'connection timed out']],
   ['timeout', '超时', ['timeout', 'timed out', 'deadline exceeded']],
-  ['loss', '全部丢包', ['100% loss', 'no reply']],
+  ['loss', '全部丢包', ['100% loss']],
+  ['noreply', '无响应', ['no reply']],
 ]
 export function errorCategory(msg) {
   const m = String(msg || '').toLowerCase()

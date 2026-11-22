@@ -148,7 +148,32 @@ func sampleFromResult(m *protocol.Monitor, r *protocol.AgentResult, at time.Time
 		return sm
 	}
 	switch m.Type {
-	case protocol.TaskPing, protocol.TaskTCPing:
+	case protocol.TaskTLS:
+		var tr protocol.TLSResult
+		if json.Unmarshal(r.Data, &tr) != nil || len(tr.Attempts) == 0 {
+			sm.Error = "unreadable result"
+			sm.LossPct = 100
+			return sm
+		}
+		sm.LossPct = tr.Stats.LossPct
+		last := tr.Attempts[len(tr.Attempts)-1]
+		switch {
+		case !last.OK:
+			sm.Error = last.Error
+			if sm.Error == "" {
+				sm.Error = "handshake failed"
+			}
+		case !tr.Verified:
+			sm.Error = "证书校验未通过：" + tr.VerifyError
+		case !tr.CertOK:
+			sm.Error = fmt.Sprintf("证书还有 %d 天到期，低于设定的 %d 天", tr.DaysLeft, m.Params.ExpectCertDays)
+		default:
+			sm.OK = true
+		}
+		if last.OK {
+			sm.LatencyMs = tr.Stats.AvgMs
+		}
+	case protocol.TaskPing, protocol.TaskTCPing, protocol.TaskUDP:
 		var pr protocol.PingResult
 		if json.Unmarshal(r.Data, &pr) != nil {
 			sm.Error = "unreadable result"

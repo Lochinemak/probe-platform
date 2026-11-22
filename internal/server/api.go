@@ -201,39 +201,63 @@ var guestLimiter = &sessionAuth{attempts: map[string][]time.Time{}}
 // dashboard cannot be used to generate heavy traffic from every node, nor to
 // reach anything but the public internet. Whatever the request asked for, the
 // fields set here win: they are the guest policy, not a default.
-func guestParams(typ protocol.TaskType, p protocol.Params) protocol.Params {
-	// The agents run inside home LANs and on the dashboard host itself, so an
-	// untrusted caller is confined to globally routable destinations.
-	p.PublicOnly = true
-	p.InsecureTLS = false
+func guestParams(typ protocol.TaskType, in protocol.Params) protocol.Params {
+	// Built up from nothing: a parameter a guest may use is copied across
+	// explicitly, so one added later is off for guests until it is listed here.
+	//
+	// PublicOnly: the agents run inside home LANs and on the dashboard host
+	// itself, so an untrusted caller is confined to globally routable
+	// destinations. ConnectTo and Resolver are destinations too;
+	// validateGuestTarget checks them.
+	p := protocol.Params{
+		PublicOnly: true,
+		Count:      in.Count, IntervalMs: in.IntervalMs, TimeoutMs: in.TimeoutMs, IPVersion: in.IPVersion,
+		ConnectTo: strings.TrimSpace(in.ConnectTo), Resolver: strings.TrimSpace(in.Resolver),
+	}
+	limit := func(n int) {
+		if p.Count > n {
+			p.Count = n
+		}
+	}
 	switch typ {
+	case protocol.TaskPing:
+		p.PacketSize, p.Continuous = in.PacketSize, in.Continuous
+	case protocol.TaskTCPing:
+		p.Port, p.Continuous = in.Port, in.Continuous
 	case protocol.TaskHTTP:
-		if p.Count > 3 {
-			p.Count = 3
-		}
-		p.SpeedTest = false
-		p.SpeedSeconds = 0
+		limit(3)
 		// A crafted method, headers or body would let an anonymous visitor send
-		// arbitrary requests from every node; a guest gets a plain read.
-		if strings.EqualFold(strings.TrimSpace(p.Method), "HEAD") {
+		// arbitrary requests from every node; a guest gets a plain read. No
+		// cookie or referer either, and no download test.
+		p.Method = "GET"
+		if strings.EqualFold(strings.TrimSpace(in.Method), "HEAD") {
 			p.Method = "HEAD"
-		} else {
-			p.Method = "GET"
 		}
-		p.Headers = nil
-		p.Body = ""
+		p.FollowRedirects = in.FollowRedirects
+		p.ExpectStatus, p.ExpectKeyword, p.ExpectMaxMs = in.ExpectStatus, in.ExpectKeyword, in.ExpectMaxMs
+		if ua := strings.TrimSpace(in.UserAgent); len(ua) <= 200 && !strings.ContainsAny(ua, "\r\n") {
+			p.UserAgent = ua
+		}
 	case protocol.TaskMTR:
-		if p.Count > 10 {
-			p.Count = 10
-		}
+		limit(10)
+		p.MaxHops, p.Resolve, p.Protocol, p.Port = in.MaxHops, in.Resolve, in.Protocol, in.Port
 	case protocol.TaskDNS:
-		if p.Count > 5 {
-			p.Count = 5
-		}
-	default:
-		if p.Count > 20 && !p.Continuous {
-			p.Count = 20
-		}
+		limit(5)
+		p.RecordType, p.DNSServer = in.RecordType, in.DNSServer
+	case protocol.TaskUDP:
+		limit(5)
+		// A guest chooses where a datagram goes but not what is in it: the
+		// built-in DNS query or the fixed text, never a payload of their own.
+		p.Port, p.PayloadMode, p.QueryName, p.NoWait = in.Port, in.PayloadMode, in.QueryName, in.NoWait
+	case protocol.TaskTLS:
+		limit(3)
+		p.Port, p.ExpectCertDays = in.Port, in.ExpectCertDays
+	case protocol.TaskDNSCompare:
+		p.RecordType, p.DNSServers = in.RecordType, in.DNSServers
+		p.Count = 0
+	}
+	if !p.Continuous {
+		limit(20)
 	}
 	if p.IntervalMs > 0 && p.IntervalMs < 200 {
 		p.IntervalMs = 200
@@ -743,11 +767,24 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !req.Type.Valid() {
-		writeErr(w, http.StatusBadRequest, "type must be one of ping, tcping, http, mtr, dns")
+		writeErr(w, http.StatusBadRequest, "type must be one of ping, tcping, http, mtr, dns, udp, tls, dns_compare, status")
 		return
+	}
+	if req.Type == protocol.TaskStatus {
+		// What a node's machine is doing is its owner's business: the nodes
+		// are other people's NAS boxes and routers.
+		if !a.auth.isAdmin(r) {
+			writeErr(w, http.StatusForbidden, "节点状态只有管理员可以查看")
+			return
+		}
+		req.Target = "self" // it has no target
 	}
 	if strings.TrimSpace(req.Target) == "" {
 		writeErr(w, http.StatusBadRequest, "target is required")
+		return
+	}
+	if len(req.Params.DNSServers) > 8 || len(req.Params.Payload) > 1024 {
+		writeErr(w, http.StatusBadRequest, "too many resolvers or payload too long")
 		return
 	}
 	if len(req.AgentIDs) > 500 {

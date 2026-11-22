@@ -1,7 +1,6 @@
 package probe
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -12,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -117,21 +115,16 @@ func withPort(hostport string) string {
 	return net.JoinHostPort(strings.Trim(hostport, "[]"), "53")
 }
 
-// systemNameserver returns the first nameserver from /etc/resolv.conf.
+// systemNameserver returns the node's first configured nameserver, with port.
 func systemNameserver() (string, error) {
-	f, err := os.Open("/etc/resolv.conf")
+	servers, err := SystemNameservers()
 	if err != nil {
-		return "", errors.New("cannot read the system resolver config; specify dns_server")
+		return "", err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) >= 2 && fields[0] == "nameserver" {
-			return withPort(fields[1]), nil
-		}
+	if len(servers) == 0 {
+		return "", errors.New("the system has no nameserver configured; specify dns_server")
 	}
-	return "", errors.New("no nameserver in /etc/resolv.conf; specify dns_server")
+	return withPort(servers[0]), nil
 }
 
 func dnsQuery(ctx context.Context, fqdn string, rtype dnsmessage.Type, server, proto string, timeout time.Duration, ipVersion string, publicOnly bool) protocol.DNSAttempt {

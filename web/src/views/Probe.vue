@@ -2,7 +2,7 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api, subscribe } from '../api.js'
 import { parseHeaders, formatHeaders, fmtTime, timeAgo } from '../fmt.js'
-import { route, navigate, taskPath, PROBE_TYPES } from '../route.js'
+import { route, navigate, taskPath, PROBE_TYPES, ADMIN_PROBE_TYPES } from '../route.js'
 import { TYPE_INFO, validateTarget } from '../validate.js'
 import * as recentStore from '../recent.js'
 import TaskResults from '../components/TaskResults.vue'
@@ -12,6 +12,8 @@ import StatCards from '../components/StatCards.vue'
 
 const props = defineProps({ role: { type: String, default: 'admin' } })
 const isAdmin = computed(() => props.role === 'admin')
+// Guests are not offered the administrator-only probes.
+const types = computed(() => PROBE_TYPES.filter((t) => isAdmin.value || !ADMIN_PROBE_TYPES.includes(t)))
 
 // --- probe type: lives in the URL (/ping, /tcping, …) ---
 const TYPE_KEY = 'probe.type'
@@ -47,8 +49,36 @@ const DEFAULTS = {
   http: { method: 'GET', count: 1, timeout_ms: 10000, follow_redirects: true, insecure_tls: false, ip_version: '' },
   mtr: { count: 10, max_hops: 30, timeout_ms: 1000, resolve: false, ip_version: '', protocol: 'icmp', port: 80 },
   dns: { record_type: 'A', dns_server: '', count: 1, timeout_ms: 3000, ip_version: '' },
+  udp: { port: 53, count: 3, interval_ms: 500, timeout_ms: 2000, payload_mode: '', payload: '', query_name: '', no_wait: false, ip_version: '' },
+  tls: { port: 443, count: 1, timeout_ms: 10000, expect_cert_days: 0, ip_version: '' },
+  dns_compare: { record_type: 'A', timeout_ms: 3000, ip_version: '' },
+  status: {},
 }
-const HTTP_EXTRA = { headers: '', body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, speed_test: false, speed_seconds: 5 }
+const HTTP_EXTRA = { headers: '', body: '', expect_status: 0, expect_keyword: '', expect_max_ms: 0, speed_test: false, speed_seconds: 5, user_agent: '', referer: '', cookie: '' }
+
+// Where the node connects and whom it asks, for the probes that connect to
+// the target: 指定连接 IP sends the probe to another address while the target
+// keeps supplying the Host header / TLS server name; 目标解析 DNS makes the
+// node resolve the target at a chosen DNS server. Shared by those types.
+const NET_TYPES = ['ping', 'tcping', 'http', 'mtr', 'udp', 'tls']
+const PUBLIC_DNS = [['223.5.5.5', '阿里 DNS (223.5.5.5)'], ['119.29.29.29', '腾讯 DNSPod (119.29.29.29)'], ['180.76.76.76', '百度 DNS (180.76.76.76)'], ['114.114.114.114', '114 DNS (114.114.114.114)'], ['1.1.1.1', 'Cloudflare (1.1.1.1)'], ['8.8.8.8', 'Google (8.8.8.8)']]
+const NET = { connect_to: '', resolver_mode: 'system', resolver_public: '223.5.5.5', resolver_custom: '' }
+const net = reactive({ ...NET })
+const hasNet = computed(() => NET_TYPES.includes(type.value))
+const resolver = computed(() => (net.resolver_mode === 'public' ? net.resolver_public : net.resolver_mode === 'custom' ? net.resolver_custom.trim() : ''))
+const needResolver = computed(() => hasNet.value && !!(net.connect_to.trim() || resolver.value))
+
+// DNS 对比: which resolvers every node asks.
+const COMPARE_PRESETS = {
+  cn: ['system', '223.5.5.5', '119.29.29.29', '180.76.76.76', '114.114.114.114'],
+  global: ['system', '1.1.1.1', '8.8.8.8', '9.9.9.9', '208.67.222.222'],
+}
+const compare = reactive({ preset: 'cn', custom: '' })
+const compareServers = computed(() => (compare.preset === 'custom' ? compare.custom.split(/[\s,，;]+/).map((s) => s.trim()).filter(Boolean) : COMPARE_PRESETS[compare.preset]))
+
+// 路由分析: a quick trace is one round; a trace is long, so it can be limited
+// to the first few of the selected nodes.
+const mtrExtra = reactive({ quick: false, nodes: 0 })
 const params = reactive(JSON.parse(JSON.stringify(DEFAULTS)))
 const httpExtra = reactive({ ...HTTP_EXTRA })
 // 持续检测 (ping / tcping): a long sampling run next to the one-off check.
@@ -64,9 +94,9 @@ watch(target, (t) => {
   if (type.value === 'http') {
     const m = /^(https?):\/\//i.exec(t.trim())
     if (m) scheme.value = m[1].toLowerCase()
-  } else if (type.value === 'tcping') {
-    const v = validateTarget('tcping', t)
-    if (v.ok && v.port) params.tcping.port = v.port
+  } else if (['tcping', 'tls', 'udp'].includes(type.value)) {
+    const v = validateTarget(type.value, t, { port: 1 })
+    if (v.ok && v.port) params[type.value].port = v.port
   }
 })
 function setScheme(s) {
@@ -131,7 +161,20 @@ function buildParams(continuous) {
       if (httpExtra.speed_test) { p.speed_test = true; p.speed_seconds = httpExtra.speed_seconds }
     }
   }
+  if (t === 'http' && isAdmin.value) {
+    // Sent as their own parameters whatever the mode: they are what a guest
+    // cannot set, not part of the full request form.
+    for (const k of ['referer', 'cookie']) if (httpExtra[k].trim()) p[k] = httpExtra[k].trim()
+  }
+  if (t === 'http' && httpExtra.user_agent.trim()) p.user_agent = httpExtra.user_agent.trim()
   if (t === 'mtr' && p.protocol === 'icmp') delete p.port
+  if (t === 'mtr' && mtrExtra.quick) p.count = 1
+  if (t === 'udp' && !isAdmin.value) delete p.payload // guests send the built-in payload
+  if (t === 'dns_compare') p.dns_servers = compareServers.value
+  if (hasNet.value) {
+    if (net.connect_to.trim()) p.connect_to = net.connect_to.trim()
+    if (resolver.value) p.resolver = resolver.value
+  }
   if (continuous) { p.count = cont.count; p.interval_ms = cont.interval_ms; p.continuous = true }
   for (const k of Object.keys(p)) if (p[k] === '' || p[k] === null || p[k] === false) delete p[k]
   return p
@@ -140,19 +183,23 @@ function buildParams(continuous) {
 async function run(mode = 'once') {
   if (running.value) return
   error.value = ''
-  const v = validateTarget(type.value, target.value, { scheme: scheme.value })
+  const v = validateTarget(type.value, target.value, { scheme: scheme.value, port: params[type.value].port })
   if (!v.ok) { targetError.value = v.error; targetBox.value?.focus(); return }
+  if (type.value === 'dns_compare' && (!compareServers.value.length || compareServers.value.length > 6)) { error.value = '对比解析器要填 1 到 6 个，例如 system,223.5.5.5,1.1.1.1'; return }
+  if (net.resolver_mode === 'custom' && hasNet.value && !resolver.value) { error.value = '选了自定义 DNS，请填写 DNS 服务器地址'; return }
   if (selected.value.size === 0) { error.value = '当前范围内没有可用的在线节点，请调整节点范围'; return }
+  let agentIds = [...selected.value]
+  if (type.value === 'mtr' && mtrExtra.nodes > 0) agentIds = agentIds.slice(0, mtrExtra.nodes)
   closeStream()
   const p = buildParams(mode === 'continuous' && hasContinuous.value)
   running.value = true
   stopping.value = false
   results.value = []
   try {
-    const snap = await api.createTask({ type: type.value, target: v.target, params: p, agent_ids: [...selected.value] })
+    const snap = await api.createTask({ type: type.value, target: v.target, params: p, agent_ids: agentIds })
     applyEvent('snapshot', snap)
     if (!snap.done) unsubscribe = subscribe(snap.task.id, applyEvent, onStreamError)
-    remember(v.target, snap.task)
+    if (type.value !== 'status') remember(v.target, snap.task)
     navigate(taskPath(snap.task.id))
   } catch (e) {
     running.value = false
@@ -186,16 +233,26 @@ function fillForm(t) {
     own.count = DEFAULTS[t.type].count
     own.interval_ms = DEFAULTS[t.type].interval_ms
   }
+  if (NET_TYPES.includes(t.type)) {
+    const known = PUBLIC_DNS.some(([ip]) => ip === p.resolver)
+    Object.assign(net, NET, { connect_to: p.connect_to || '' }, p.resolver ? (known ? { resolver_mode: 'public', resolver_public: p.resolver } : { resolver_mode: 'custom', resolver_custom: p.resolver }) : {})
+  }
+  if (t.type === 'mtr') mtrExtra.quick = p.count === 1
+  if (t.type === 'dns_compare' && p.dns_servers?.length) {
+    const preset = Object.keys(COMPARE_PRESETS).find((k) => COMPARE_PRESETS[k].join() === p.dns_servers.join())
+    Object.assign(compare, preset ? { preset } : { preset: 'custom', custom: p.dns_servers.join(', ') })
+  }
   if (t.type === 'http') {
     Object.assign(httpExtra, HTTP_EXTRA, {
       headers: formatHeaders(p.headers), body: p.body || '', expect_status: p.expect_status || 0, expect_keyword: p.expect_keyword || '',
       expect_max_ms: p.expect_max_ms || 0, speed_test: !!p.speed_test, speed_seconds: p.speed_seconds || 5,
+      user_agent: p.user_agent || '', referer: p.referer || '', cookie: p.cookie || '',
     })
     const simple = (p.method || 'GET') === 'GET' && (p.count || 1) === 1 && p.follow_redirects && !p.insecure_tls && !p.headers && !p.body
       && !p.expect_status && !p.expect_keyword && !p.expect_max_ms && !p.speed_test
     httpMode.value = simple ? 'simple' : 'full'
   }
-  target.value = t.target
+  target.value = t.type === 'status' ? '' : t.target
   targetError.value = ''
 }
 
@@ -244,6 +301,10 @@ function dismissLastTask() {
   try { localStorage.removeItem(LAST_KEY) } catch { /* ignore */ }
 }
 
+// A probe type the current role is not offered (a guest on /status, or after
+// logging out) falls back to ping.
+watch(types, (list) => { if (!list.includes(type.value)) setType('ping') }, { immediate: true })
+
 // --- URL → state ---
 watch(() => [route.page, route.type, route.taskId], ([page, t, id]) => {
   if (page !== 'probe') return
@@ -282,13 +343,14 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
     <div class="card probe-form" v-show="!zen">
       <div class="row" style="margin-bottom:14px">
         <div class="tabs types" role="tablist" aria-label="检测类型">
-          <button v-for="t in PROBE_TYPES" :key="t" type="button" role="tab" :aria-selected="type === t" :class="{ active: type === t }" @click="setType(t)">{{ TYPE_INFO[t].label }}</button>
+          <button v-for="t in types" :key="t" type="button" role="tab" :aria-selected="type === t" :class="{ active: type === t }" @click="setType(t)">{{ TYPE_INFO[t].label }}</button>
         </div>
         <span class="sub">{{ info.desc }}</span>
       </div>
 
       <form class="probe-main" @submit.prevent="run('once')">
-        <TargetInput ref="targetBox" v-model="target" :items="recent" :placeholder="info.placeholder" :invalid="!!targetError" @remove="removeRecent" @clear="clearRecent">
+        <div class="target-box" v-if="type === 'status'"><input class="target-input" type="text" disabled :placeholder="info.placeholder" aria-label="探测目标" /></div>
+        <TargetInput v-else ref="targetBox" v-model="target" :items="recent" :placeholder="info.placeholder" :invalid="!!targetError" @remove="removeRecent" @clear="clearRecent">
           <template #prefix v-if="type === 'http'">
             <div class="tabs sm" role="group" aria-label="协议">
               <button type="button" :class="{ active: scheme === 'https' }" @click="setScheme('https')">HTTPS</button>
@@ -296,7 +358,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
             </div>
           </template>
         </TargetInput>
-        <input v-if="type === 'tcping'" class="port-input" type="number" min="1" max="65535" v-model.number="params.tcping.port" title="端口（目标里带了端口时以目标为准）" aria-label="端口" placeholder="端口" />
+        <input v-if="['tcping', 'tls', 'udp'].includes(type)" class="port-input" type="number" min="1" max="65535" v-model.number="params[type].port" title="端口（目标里带了端口时以目标为准）" aria-label="端口" placeholder="端口" />
         <div class="probe-actions">
           <button v-if="running" class="btn stop" type="button" :disabled="stopping" @click="stop">{{ stopping ? '正在停止…' : '停止检测' }}</button>
           <template v-else-if="hasContinuous">
@@ -315,10 +377,42 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
           <button type="button" :class="{ active: httpMode === 'simple' }" title="一次普通 GET，只看状态码和耗时" @click="httpMode = 'simple'">简易</button>
           <button type="button" :class="{ active: httpMode === 'full' }" title="自定义方法、次数、断言等完整请求选项" @click="httpMode = 'full'">完整</button>
         </div>
-        <div class="tabs sm" role="group" aria-label="协议栈">
+        <div class="tabs sm" v-if="type === 'mtr'" role="group" aria-label="路由分析方式">
+          <button type="button" :class="{ active: mtrExtra.quick }" title="每个节点只走一轮，快速看路径上有哪些跳点" @click="mtrExtra.quick = true">快速路径</button>
+          <button type="button" :class="{ active: !mtrExtra.quick }" title="多轮采样，统计每一跳的丢包、平均延迟和抖动" @click="mtrExtra.quick = false">持续统计</button>
+        </div>
+        <div class="tabs sm" v-if="type !== 'status'" role="group" aria-label="协议栈">
           <button v-for="[v, label] in [['', '自动'], ['4', 'IPv4'], ['6', 'IPv6']]" :key="v" type="button" :class="{ active: (params[type].ip_version || '') === v }" @click="params[type].ip_version = v">{{ label }}</button>
         </div>
-        <button class="btn sm" type="button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">{{ showAdvanced ? '收起选项' : '高级选项' }}</button>
+        <button class="btn sm" v-if="type !== 'status'" type="button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">{{ showAdvanced ? '收起选项' : '高级选项' }}</button>
+      </div>
+
+      <div class="row" v-if="type === 'dns_compare'" style="margin-top:12px;gap:16px">
+        <div class="field"><label>记录类型</label>
+          <select v-model="params.dns_compare.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT']" :key="t">{{ t }}</option></select>
+        </div>
+        <div class="field"><label>对比解析器</label>
+          <div class="tabs sm" role="group" aria-label="对比解析器">
+            <button type="button" :class="{ active: compare.preset === 'cn' }" title="节点系统 DNS、阿里、腾讯、百度、114" @click="compare.preset = 'cn'">国内组</button>
+            <button type="button" :class="{ active: compare.preset === 'global' }" title="节点系统 DNS、Cloudflare、Google、Quad9、OpenDNS" @click="compare.preset = 'global'">海外组</button>
+            <button type="button" :class="{ active: compare.preset === 'custom' }" @click="compare.preset = 'custom'">自定义</button>
+          </div>
+        </div>
+        <div class="field grow" v-if="compare.preset === 'custom'"><label>解析器（最多 6 个，逗号分隔；system 表示节点自己的系统 DNS）</label>
+          <input type="text" v-model="compare.custom" placeholder="system, 223.5.5.5, 1.1.1.1" spellcheck="false" /></div>
+        <span class="sub" v-else style="margin-top:18px">{{ compareServers.map((s) => (s === 'system' ? '系统 DNS' : s)).join('、') }}</span>
+      </div>
+
+      <div class="row" v-if="hasNet" style="margin-top:12px;gap:16px">
+        <div class="field"><label>目标解析 DNS</label>
+          <select v-model="net.resolver_mode"><option value="system">节点系统 DNS</option><option value="public">指定公共 DNS</option><option value="custom">自定义 DNS</option></select>
+        </div>
+        <div class="field" v-if="net.resolver_mode === 'public'"><label>DNS 服务器</label>
+          <select v-model="net.resolver_public"><option v-for="[ip, label] in PUBLIC_DNS" :key="ip" :value="ip">{{ label }}</option></select>
+        </div>
+        <div class="field grow" v-if="net.resolver_mode === 'custom'"><label>DNS 服务器</label>
+          <input type="text" v-model="net.resolver_custom" placeholder="8.8.8.8 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
+        <span class="sub" v-if="needResolver" style="margin-top:18px">指定连接 IP 与指定解析 DNS 需要较新的 agent，版本过旧的节点已在下面置灰。</span>
       </div>
 
       <div class="row" v-if="type === 'http' && httpMode === 'full'" style="margin-top:14px;gap:16px">
@@ -354,6 +448,33 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
         </template>
         <template v-else-if="type === 'http'">
           <div class="field"><label>超时 (ms)</label><input type="number" min="1000" max="60000" v-model.number="params.http.timeout_ms" /></div>
+          <div class="field grow"><label>User-Agent</label><input type="text" v-model="httpExtra.user_agent" maxlength="200" placeholder="默认 probe-platform/1.0" spellcheck="false" /></div>
+          <template v-if="isAdmin">
+            <div class="field grow"><label>Referer</label><input type="text" v-model="httpExtra.referer" placeholder="https://example.com/" spellcheck="false" /></div>
+            <div class="field grow"><label>Cookie</label><input type="text" v-model="httpExtra.cookie" placeholder="key=value; sid=..." spellcheck="false" /></div>
+          </template>
+        </template>
+        <template v-else-if="type === 'udp'">
+          <div class="field"><label>次数</label><input type="number" min="1" max="100" v-model.number="params.udp.count" /></div>
+          <div class="field"><label>间隔 (ms)</label><input type="number" min="200" max="5000" v-model.number="params.udp.interval_ms" /></div>
+          <div class="field"><label>读取超时 (ms)</label><input type="number" min="200" max="5000" v-model.number="params.udp.timeout_ms" /></div>
+          <div class="field"><label>Payload 模式</label>
+            <select v-model="params.udp.payload_mode"><option value="">自动（53 端口发 DNS 查询）</option><option value="dns">DNS 查询</option><option value="text">文本</option></select>
+          </div>
+          <div class="field" v-if="params.udp.payload_mode !== 'text'"><label>DNS 查询域名</label><input type="text" v-model="params.udp.query_name" placeholder="example.com" spellcheck="false" /></div>
+          <div class="field grow" v-if="params.udp.payload_mode === 'text' && isAdmin"><label>文本 Payload（最多 1024 字节）</label><input type="text" v-model="params.udp.payload" placeholder="默认 probe" spellcheck="false" /></div>
+          <div class="field"><label>响应等待</label>
+            <select v-model="params.udp.no_wait"><option :value="false">等待响应</option><option :value="true">只测试可发送</option></select>
+          </div>
+          <p class="sub" style="flex-basis:100%;margin:0">UDP 没有握手：收到回应说明服务在；收到"端口不可达"说明没有服务监听；什么都没收到，可能是被防火墙丢弃，也可能是服务不回应这种数据。<template v-if="!isAdmin">游客只能发送内置的 DNS 查询或固定文本。</template></p>
+        </template>
+        <template v-else-if="type === 'tls'">
+          <div class="field"><label>握手次数</label><input type="number" min="1" max="10" v-model.number="params.tls.count" /></div>
+          <div class="field"><label>超时 (ms)</label><input type="number" min="500" max="30000" v-model.number="params.tls.timeout_ms" /></div>
+          <div class="field"><label>证书剩余天数低于此值算失败（0 不检查）</label><input type="number" min="0" max="3650" v-model.number="params.tls.expect_cert_days" /></div>
+        </template>
+        <template v-else-if="type === 'dns_compare'">
+          <div class="field"><label>超时 (ms)</label><input type="number" min="500" max="10000" v-model.number="params.dns_compare.timeout_ms" /></div>
         </template>
         <template v-else-if="type === 'dns'">
           <div class="field"><label>记录类型</label>
@@ -372,6 +493,16 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
           <div class="field"><label>最大跳数</label><input type="number" min="1" max="64" v-model.number="params.mtr.max_hops" /></div>
           <div class="field"><label>每跳超时 (ms)</label><input type="number" min="200" max="5000" v-model.number="params.mtr.timeout_ms" /></div>
           <label class="field inline" style="margin-top:18px"><input type="checkbox" v-model="params.mtr.resolve" /> 反向解析主机名</label>
+          <div class="field"><label>路由节点</label>
+            <select v-model.number="mtrExtra.nodes"><option :value="0">全部选中的节点</option><option :value="1">只用前 1 个</option><option :value="3">只用前 3 个</option><option :value="5">只用前 5 个</option></select>
+          </div>
+        </template>
+        <template v-if="hasNet">
+          <div class="field" style="flex-basis:100%"></div>
+          <div class="field grow"><label>指定连接 IP（或主机名）</label>
+            <input type="text" v-model="net.connect_to" placeholder="93.184.216.34 或 edge.example.com" spellcheck="false" />
+          </div>
+          <p class="sub" style="margin:18px 0 0;max-width:520px">{{ ['http', 'tls'].includes(type) ? '实际连接到这个地址；URL / Host、TLS SNI 和证书校验仍然用目标域名。用来测某一台源站或某个 CDN 节点。' : '跳过目标域名的解析，直接探测这个地址。' }}</p>
         </template>
         <template v-if="hasContinuous">
           <div class="field" style="flex-basis:100%"></div>
@@ -382,7 +513,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
       </div>
     </div>
 
-    <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" />
+    <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" :need-resolver="needResolver" />
 
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
 
@@ -390,6 +521,6 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
       <TaskResults :task="task" :results="results" :running="running" v-model:zen="zen" />
     </div>
     <div class="card empty" v-else-if="opening">正在加载检测结果…</div>
-    <div class="card empty" v-else>输入目标并点击「{{ hasContinuous ? '检测' : '发起检测' }}」，各节点结果会实时显示在这里。</div>
+    <div class="card empty" v-else>{{ type === 'status' ? '点击「发起检测」查询选中节点自身的状态。' : `输入目标并点击「${hasContinuous ? '检测' : '发起检测'}」，各节点结果会实时显示在这里。` }}</div>
   </div>
 </template>

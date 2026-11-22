@@ -151,6 +151,9 @@ table.grid tr.clickable { cursor: pointer; }
 .nav-pop button { background: transparent; border: 0; padding: 8px 12px; border-radius: 8px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .nav-pop button:hover, .nav-pop button.active { color: var(--text); background: var(--bg-3); }
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.metrics.few { grid-template-columns: repeat(3, minmax(0, 220px)); }
+.cert { border-top: 1px solid var(--border); padding: 8px 0; }
+table.grid tr.group-first td { border-top: 1px solid var(--border); }
 .metric { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-width: 0; }
 .metric-value { font-family: var(--mono); font-size: 20px; font-weight: 700; line-height: 1.35; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .metric-value .sub { font-size: 13px; font-weight: 400; }
@@ -235,6 +238,7 @@ body.zen .app { padding-top: 16px; }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: var(--bg-3); color: var(--muted); letter-spacing: .3px; }
+.badge.udp { color: #5eead4; } .badge.tls { color: #fcd34d; } .badge.dns_compare { color: #f0abfc; } .badge.status { color: #a5b4fc; }
 .badge.ping { color: #7dd3fc; } .badge.tcping { color: #c4b5fd; } .badge.http { color: #86efac; } .badge.mtr { color: #fdba74; } .badge.dns { color: #f9a8d4; }
 .badge.running { color: var(--accent-2); } .badge.done { color: var(--ok); } .badge.error { color: var(--bad); }
 .badge.code-2 { color: var(--ok); } .badge.code-3 { color: var(--accent-2); } .badge.code-4 { color: var(--warn); } .badge.code-5 { color: var(--bad); }

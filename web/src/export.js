@@ -25,6 +25,23 @@ const TABLES = {
   },
 }
 TABLES.tcping = TABLES.ping
+TABLES.udp = TABLES.ping
+TABLES.tls = {
+  headers: ['节点', '地域', '线路', '响应 IP', 'IP 归属地', '握手 ms', '协议', '套件', '证书主体', '签发者', '到期', '剩余天数', '校验', '状态'],
+  row: (r) => [...base(r), r.ip, r.ipGeo, num(r.metric), r.tls?.version || '', r.tls?.cipher || '', r.leaf?.subject || '', r.leaf?.issuer || '', r.leaf?.not_after ? String(r.leaf.not_after).slice(0, 10) : '',
+    r.tls?.chain?.length ? r.tls.days_left : '', r.tls?.chain?.length ? (r.tls.verified ? '通过' : '未通过') : '', r.statusText],
+}
+TABLES.dns_compare = {
+  headers: ['节点', '地域', '线路', '结论', '结果组数', '各解析器结果', '最慢解析 ms', '状态'],
+  row: (r) => [...base(r), { consistent: '一致', inconsistent: '不一致', failed: '全部失败' }[r.verdict] || '', r.groups ?? '',
+    (r.entries || []).map((e) => `${e.label || e.server}: ${e.attempt?.ok ? (e.attempt.answers || []).map((a) => a.value).filter(Boolean).join(' ') || '无记录' : e.attempt?.error || e.attempt?.rcode || '失败'}`).join('; '),
+    num(r.slowest, 2), r.statusText],
+}
+TABLES.status = {
+  headers: ['节点', '地域', '线路', '系统', '内核', '运行时长 s', 'CPU', '负载', '内存可用 B', '内存总量 B', '磁盘可用 B', '磁盘总量 B', 'agent 版本', '状态'],
+  row: (r) => [...base(r), r.sys?.platform || r.sys?.os || '', r.sys?.kernel || '', r.sys?.uptime_sec ?? '', r.sys?.cpus ?? '', (r.sys?.load || []).map((v) => v.toFixed(2)).join(' '),
+    r.sys?.mem_available ?? '', r.sys?.mem_total ?? '', r.sys?.disk_free ?? '', r.sys?.disk_total ?? '', r.sys?.agent_version || '', r.statusText],
+}
 
 export function tableOf(task, rows) {
   const t = TABLES[task.type] || TABLES.ping

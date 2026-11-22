@@ -32,7 +32,38 @@ export function derive(task, r) {
   const resolved = progress.find((p) => p.kind === 'resolved')
   const resolvedIP = resolved?.data || ''
   switch (task.type) {
+    case 'tls': {
+      let attempts = data?.attempts
+      if (!attempts) attempts = progress.filter((p) => p.kind === 'attempt').map((p) => p.data)
+      out.attempts = attempts
+      out.last = attempts[attempts.length - 1] || null
+      const ok = attempts.filter((a) => a.ok).map((a) => a.handshake_ms)
+      out.stats = data?.stats || { sent: attempts.length, received: ok.length, avg_ms: ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : undefined }
+      out.tls = data || null // version, cipher, chain, verified … once the node has reported
+      out.leaf = data?.chain?.[0] || null
+      out.ip = data?.ip || resolvedIP
+      out.port = data?.port
+      break
+    }
+    case 'dns_compare': {
+      let entries = data?.entries
+      if (!entries) entries = progress.filter((p) => p.kind === 'entry').map((p) => p.data)
+      out.entries = entries
+      const answered = entries.filter((e) => e.attempt?.ok)
+      const keys = [...new Set(answered.map((e) => e.key))]
+      out.verdict = data?.verdict || (r.status === 'running' ? '' : answered.length ? (keys.length > 1 ? 'inconsistent' : 'consistent') : 'failed')
+      out.groups = data?.groups ?? keys.length
+      // Groups are numbered by size, so "1" is what most resolvers said.
+      const count = (k) => answered.filter((e) => e.key === k).length
+      out.groupOf = Object.fromEntries(keys.sort((a, b) => count(b) - count(a) || a.localeCompare(b)).map((k, i) => [k, i + 1]))
+      out.slowest = answered.length ? Math.max(...answered.map((e) => e.attempt.rtt_ms)) : undefined
+      break
+    }
+    case 'status':
+      out.sys = data || null
+      break
     case 'ping':
+    case 'udp':
     case 'tcping': {
       let replies = data?.replies
       if (!replies) replies = progress.filter((p) => p.kind === 'reply').map((p) => p.data)
@@ -120,16 +151,36 @@ function finish(task, r, out, resolved) {
   out.ipGeo = r.target_geo || resolved?.geo || ''
   // Every address this node got for the target, for the response-IP summary:
   // the one it probed, or for a DNS lookup each address record it was given.
-  out.ips = task.type === 'dns'
-    ? (out.last?.answers || []).filter((a) => a.type === 'A' || a.type === 'AAAA').map((a) => ({ ip: a.value, geo: a.geo || '' }))
-    : out.ip ? [{ ip: out.ip, geo: out.ipGeo }] : []
+  const addresses = (answers) => (answers || []).filter((a) => (a.type === 'A' || a.type === 'AAAA') && a.value).map((a) => ({ ip: a.value, geo: a.geo || '' }))
+  if (task.type === 'dns') out.ips = addresses(out.last?.answers)
+  else if (task.type === 'dns_compare') {
+    // Each address once per node, however many of its resolvers returned it.
+    const seen = new Map()
+    for (const e of out.entries) for (const a of addresses(e.attempt?.answers)) if (!seen.has(a.ip)) seen.set(a.ip, a)
+    out.ips = [...seen.values()]
+  } else out.ips = out.ip ? [{ ip: out.ip, geo: out.ipGeo }] : []
 
   let metric, failed = r.status === 'error', why = r.error || ''
   switch (task.type) {
     case 'ping':
+    case 'udp':
     case 'tcping':
       if (out.stats?.received) metric = out.stats.avg_ms
-      if (r.status === 'done' && out.stats?.sent && !out.stats.received) { failed = true; why = why || '100% loss' }
+      if (r.status === 'done' && out.stats?.sent && !out.stats.received) {
+        failed = true
+        // UDP says why nothing came back: the port is closed, or silence.
+        why = why || [...(out.replies || [])].reverse().find((x) => x.error)?.error || '100% loss'
+      }
+      break
+    case 'tls':
+      if (out.stats?.received) metric = out.stats.avg_ms
+      if (out.last && !out.last.ok) { failed = true; why = why || out.last.error || '' }
+      else if (out.tls && !out.tls.verified) { failed = true; why = why || 'x509: ' + (out.tls.verify_error || 'certificate verification failed') }
+      else if (out.tls && out.tls.cert_ok === false) { failed = true; why = why || `证书还有 ${out.tls.days_left} 天到期，低于设定的 ${task.params?.expect_cert_days} 天` }
+      break
+    case 'dns_compare':
+      metric = out.slowest
+      if (r.status === 'done' && out.verdict === 'failed') { failed = true; why = why || out.entries.find((e) => e.attempt?.error)?.attempt.error || 'no answer' }
       break
     case 'http':
       metric = out.avg?.total_ms
@@ -153,8 +204,9 @@ function finish(task, r, out, resolved) {
   out.errorKind = cat?.key || ''
   out.errorText = failed ? why : ''
   // Timed out: the node got no answer in time, as opposed to being refused.
-  out.timedOut = failed && ['timeout', 'connect_timeout', 'loss'].includes(out.errorKind)
+  out.timedOut = failed && ['timeout', 'connect_timeout', 'loss', 'noreply'].includes(out.errorKind)
   out.statusText = out.live ? (r.status === 'pending' ? '等待' : '进行中')
-    : failed ? (task.type === 'mtr' && r.status === 'done' ? '未到达' : out.assertFail && out.last?.ok ? '断言未通过' : cat.label)
+    : failed ? (task.type === 'mtr' && r.status === 'done' ? '未到达' : out.assertFail && out.last?.ok ? '断言未通过'
+      : task.type === 'tls' && out.last?.ok ? (out.tls?.verified ? '即将到期' : '证书无效') : cat.label)
     : out.stopped ? '已停止' : '完成'
 }

@@ -3,14 +3,17 @@
 // route object, navigate() changes it, and `route` is the reactive current one.
 //
 //   /                       probe page, last used probe type
-//   /ping /tcping /http …   probe page with that type (?target= prefills the form)
+//   /ping /tcping /http /udp /dns /mtr /tls /dns_compare /status
+//                           probe page with that type (?target= prefills the form)
 //   /t/<taskId>             probe page showing that task
 //   /s/<token>              a shared result: public, read-only, no session needed
 //   /coverage /monitors …    the other pages
 import { reactive } from 'vue'
 
 // Probe types in tab order. The id is both the task type and the URL path.
-export const PROBE_TYPES = ['ping', 'tcping', 'http', 'dns', 'mtr']
+export const PROBE_TYPES = ['ping', 'tcping', 'http', 'udp', 'dns', 'mtr', 'tls', 'dns_compare', 'status']
+// 节点状态 shows what the node's own machine is doing: administrators only.
+export const ADMIN_PROBE_TYPES = ['status']
 export const PAGES = ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']
 
 export function parse(pathname, search = '') {

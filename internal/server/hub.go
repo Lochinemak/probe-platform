@@ -744,6 +744,16 @@ func (h *Hub) createTask(typ protocol.TaskType, target string, params protocol.P
 			res.FinishedAt = &now
 			continue
 		}
+		// An agent is only sent what it has said it understands. One that is
+		// older than a probe type would reject it, but one older than a
+		// parameter would ignore it and report a measurement of something
+		// else as if nothing were wrong.
+		if missing := missingCap(ac.snapshot().Capabilities, typ, params); missing != "" {
+			res.Status, res.Error = protocol.StatusError, "unsupported: 节点版本过旧，不支持这项探测或参数（缺少能力 "+missing+"），请升级该节点的 agent"
+			now := time.Now()
+			res.FinishedAt = &now
+			continue
+		}
 		if !ac.trySend(taskMsg) {
 			res.Status, res.Error = protocol.StatusError, "agent send queue full"
 			now := time.Now()
@@ -816,6 +826,17 @@ func (h *Hub) handleProgress(ac *agentConn, p protocol.Progress) {
 			}
 		}
 	}
+	if h.geo != nil && tr.task.Type == protocol.TaskDNSCompare && p.Kind == "entry" {
+		var e protocol.DNSCompareEntry
+		if json.Unmarshal(p.Data, &e) == nil {
+			one := []protocol.DNSAttempt{e.Attempt}
+			h.geo.AnnotateDNS(one)
+			e.Attempt = one[0]
+			if b, err := json.Marshal(e); err == nil {
+				p.Data = b
+			}
+		}
+	}
 	resolved := ""
 	if p.Kind == "resolved" && json.Unmarshal(p.Data, &resolved) == nil && resolved != "" && h.geo != nil && h.geo.HasOffline() {
 		p.Geo = h.geo.Offline(resolved)
@@ -854,6 +875,19 @@ func (h *Hub) handleResult(ac *agentConn, r protocol.Result) {
 		if json.Unmarshal(r.Data, &dr) == nil {
 			h.geo.AnnotateDNS(dr.Attempts)
 			if b, err := json.Marshal(dr); err == nil {
+				r.Data = b
+			}
+		}
+	}
+	if h.geo != nil && tr.task.Type == protocol.TaskDNSCompare && len(r.Data) > 0 {
+		var cr protocol.DNSCompareResult
+		if json.Unmarshal(r.Data, &cr) == nil {
+			for i := range cr.Entries {
+				one := []protocol.DNSAttempt{cr.Entries[i].Attempt}
+				h.geo.AnnotateDNS(one)
+				cr.Entries[i].Attempt = one[0]
+			}
+			if b, err := json.Marshal(cr); err == nil {
 				r.Data = b
 			}
 		}
@@ -997,6 +1031,28 @@ func (h *Hub) HasRunningContinuous(owner string) bool {
 		}
 	}
 	return false
+}
+
+// missingCap returns the first capability a task needs that an agent has not
+// announced, "" when it can run the task.
+func missingCap(have []string, typ protocol.TaskType, p protocol.Params) string {
+	need := []string{}
+	if c := typ.Capability(); c != "" {
+		need = append(need, c)
+	}
+	if p.ConnectTo != "" || (p.Resolver != "" && !strings.EqualFold(p.Resolver, "system")) {
+		need = append(need, protocol.CapResolver)
+	}
+next:
+	for _, n := range need {
+		for _, h := range have {
+			if h == n {
+				continue next
+			}
+		}
+		return n
+	}
+	return ""
 }
 
 // taskDeadline is how long a task may run before the hub gives up on it:

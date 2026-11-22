@@ -198,14 +198,16 @@ func runSelfTest(args []string) int {
 	types := []protocol.TaskType{protocol.TaskPing, protocol.TaskTCPing, protocol.TaskHTTP, protocol.TaskMTR, protocol.TaskDNS}
 	target := "1.1.1.1"
 	extra := map[string]any{}
-	switch len(args) {
-	case 0:
-	case 1:
+	switch {
+	case len(args) == 0:
+	case len(args) == 1 && args[0] == string(protocol.TaskStatus):
+		types, target = []protocol.TaskType{protocol.TaskStatus}, "" // the one probe without a target
+	case len(args) == 1:
 		target = args[0]
 	default:
 		t := protocol.TaskType(args[0])
 		if !t.Valid() {
-			fmt.Fprintf(os.Stderr, "unknown type %q (ping|tcping|http|mtr|dns)\n", args[0])
+			fmt.Fprintf(os.Stderr, "unknown type %q (ping|tcping|http|mtr|dns|udp|tls|dns_compare|status)\n", args[0])
 			return 2
 		}
 		types = []protocol.TaskType{t}
@@ -218,16 +220,18 @@ func runSelfTest(args []string) int {
 				return 2
 			}
 			switch k {
-			case "count", "interval_ms", "timeout_ms", "packet_size", "port", "max_hops", "expect_status", "expect_max_ms", "speed_seconds":
+			case "count", "interval_ms", "timeout_ms", "packet_size", "port", "max_hops", "expect_status", "expect_max_ms", "speed_seconds", "expect_cert_days":
 				n, err := strconv.Atoi(v)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "%s must be a number, got %q\n", k, v)
 					return 2
 				}
 				extra[k] = n
-			case "follow_redirects", "insecure_tls", "speed_test", "resolve":
+			case "follow_redirects", "insecure_tls", "speed_test", "resolve", "no_wait":
 				extra[k] = v == "true" || v == "1"
-			default: // ip_version, protocol, method, record_type, dns_server, expect_keyword, body ...
+			case "dns_servers": // dns_compare: system,223.5.5.5,1.1.1.1
+				extra[k] = strings.Split(v, ",")
+			default: // ip_version, protocol, method, record_type, dns_server, expect_keyword, body, connect_to, resolver ...
 				extra[k] = v
 			}
 		}
@@ -255,7 +259,7 @@ func runSelfTest(args []string) int {
 		if typ == protocol.TaskHTTP && !strings.Contains(target, "://") {
 			task.Target = "https://" + target
 		}
-		if typ == protocol.TaskTCPing {
+		if typ == protocol.TaskTCPing && task.Params.Port == 0 {
 			task.Params.Port = 443
 		}
 		fmt.Fprintf(os.Stderr, "\n== %s %s ==\n", typ, task.Target)
