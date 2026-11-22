@@ -1,42 +1,56 @@
 <script setup>
-import { computed } from 'vue'
+// One task's result: title and actions, summary cards, the latency legend,
+// the response-IP summary, filters, then the table for the probe type. The
+// filters live here so every part works on the same narrowed rows.
+import { computed, ref, watch } from 'vue'
 import { derive } from '../derive.js'
-import { typeLabel, fmtTime } from '../fmt.js'
+import { latencyScale } from '../fmt.js'
+import ResultHeader from './ResultHeader.vue'
+import MetricCards from './MetricCards.vue'
+import IpSummary from './IpSummary.vue'
+import ResultFilters from './ResultFilters.vue'
 import PingTable from './PingTable.vue'
 import HttpTable from './HttpTable.vue'
 import MtrView from './MtrView.vue'
 import DnsTable from './DnsTable.vue'
 
-const props = defineProps({ task: Object, results: Array, running: Boolean })
+const props = defineProps({ task: Object, results: Array, running: Boolean, zen: Boolean })
+const emit = defineEmits(['update:zen'])
+
 const rows = computed(() => (props.results || []).map((r) => derive(props.task, r)))
-const doneCount = computed(() => rows.value.filter((r) => r.status === 'done' || r.status === 'error').length)
-const okCount = computed(() => rows.value.filter((r) => r.status === 'done').length)
-const avgAll = computed(() => {
-  const vals = rows.value.map((r) => (props.task.type === 'http' ? r.avg?.total_ms : props.task.type === 'dns' ? r.last?.rtt_ms : r.stats?.avg_ms)).filter((v) => v !== undefined && v !== null && !Number.isNaN(v))
-  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : undefined
+
+const NO_FILTER = { line: '', region: '', place: '', ip: '', failed: false }
+const filter = ref({ ...NO_FILTER })
+watch(() => props.task?.id, () => { filter.value = { ...NO_FILTER } })
+const filtered = computed(() => {
+  const f = filter.value
+  return rows.value.filter((r) => (!f.line || (r.line || '其他') === f.line) && (!f.region || r.region === f.region) && (!f.place || r.placeKey === f.place)
+    && (!f.ip || (r.ips || []).some((x) => x.ip === f.ip)) && (!f.failed || r.failed))
 })
-const best = computed(() => {
-  const withAvg = rows.value.filter((r) => (props.task.type === 'http' ? r.avg?.total_ms : r.stats?.avg_ms) !== undefined)
-  if (!withAvg.length) return null
-  return withAvg.reduce((a, b) => ((props.task.type === 'http' ? a.avg.total_ms : a.stats.avg_ms) <= (props.task.type === 'http' ? b.avg.total_ms : b.stats.avg_ms) ? a : b))
-})
+const scale = computed(() => latencyScale(props.task.type))
+const isHTTP = computed(() => props.task.type === 'http')
+// What the table is showing, in its own order, for the exports.
+const shown = ref([])
 </script>
 
 <template>
   <div>
-    <div class="summary">
-      <span><span class="badge" :class="task.type">{{ typeLabel[task.type] }}</span></span>
-      <span class="mono">{{ task.target }}</span>
-      <span>节点 <b>{{ rows.length }}</b></span>
-      <span>完成 <b>{{ doneCount }}</b><template v-if="okCount !== doneCount"> · 成功 <b>{{ okCount }}</b></template></span>
-      <span v-if="avgAll !== undefined && task.type !== 'mtr'">全网平均 <b>{{ avgAll.toFixed(1) }} ms</b></span>
-      <span v-if="best && task.type !== 'mtr'">最快 <b>{{ best.agent_name }}</b></span>
-      <span class="sub">{{ fmtTime(task.created_at) }}</span>
-      <span v-if="running"><span class="pulse"></span>实时更新中</span>
+    <ResultHeader :task="task" :rows="shown.length ? shown : filtered" :results="results" :running="running" :zen="zen" @update:zen="emit('update:zen', $event)" />
+    <MetricCards :task="task" :rows="filtered" />
+    <div class="legend lat-legend" aria-label="延迟色阶">
+      <span class="sub">{{ isHTTP ? '请求耗时' : '延迟' }}</span>
+      <span v-for="(label, i) in scale.labels" :key="i"><i :class="'lat-bg-' + i"></i>{{ label }}</span>
+      <span><i class="lat-bg-x"></i>超时 / 无数据</span>
+      <span class="sub" v-if="isHTTP">HTTP 耗时是整个请求（解析、连接、TLS、等待首字节、下载）的时间，不是链路往返延迟。</span>
     </div>
-    <PingTable v-if="task.type === 'ping' || task.type === 'tcping'" :task="task" :results="rows" />
-    <HttpTable v-else-if="task.type === 'http'" :task="task" :results="rows" />
-    <MtrView v-else-if="task.type === 'mtr'" :task="task" :results="rows" />
-    <DnsTable v-else-if="task.type === 'dns'" :task="task" :results="rows" />
+    <IpSummary v-if="task.type !== 'mtr'" :rows="rows" :selected="filter.ip" @select="filter = { ...filter, ip: $event }" />
+    <ResultFilters v-model="filter" :rows="rows" />
+    <div class="empty" v-if="rows.length && !filtered.length">没有符合当前筛选的节点。</div>
+    <template v-else>
+      <PingTable v-if="task.type === 'ping' || task.type === 'tcping'" :task="task" :results="filtered" @order="shown = $event" />
+      <HttpTable v-else-if="task.type === 'http'" :task="task" :results="filtered" @order="shown = $event" />
+      <MtrView v-else-if="task.type === 'mtr'" :task="task" :results="filtered" />
+      <DnsTable v-else-if="task.type === 'dns'" :task="task" :results="filtered" @order="shown = $event" />
+    </template>
   </div>
 </template>

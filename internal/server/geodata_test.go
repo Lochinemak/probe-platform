@@ -275,3 +275,27 @@ func TestStatsAPI(t *testing.T) {
 		t.Errorf("activity: %+v rate %v", st, st.SuccessRate24h)
 	}
 }
+
+// TestAnnotateTarget: a result carries the address its node probed even
+// without an IP database (the location is then simply absent).
+func TestAnnotateTarget(t *testing.T) {
+	var g *GeoIP
+	for _, c := range []struct {
+		typ  protocol.TaskType
+		data string
+		want string
+	}{
+		{protocol.TaskPing, `{"ip":"223.5.5.5","replies":[]}`, "223.5.5.5"},
+		{protocol.TaskMTR, `{"ip":"2400:3200::1","hops":[]}`, "2400:3200::1"},
+		{protocol.TaskHTTP, `{"attempts":[{"ip":"1.1.1.1"},{"ip":""},{"ip":"1.0.0.1"}]}`, "1.0.0.1"},
+		{protocol.TaskDNS, `{"attempts":[{"server":"223.5.5.5:53"}]}`, ""},
+		{protocol.TaskPing, ``, ""},
+		{protocol.TaskPing, `not json`, ""},
+	} {
+		r := &protocol.AgentResult{Data: json.RawMessage(c.data)}
+		g.AnnotateTarget(c.typ, r)
+		if r.TargetIP != c.want || r.TargetGeo != "" {
+			t.Errorf("%s %s: target %q geo %q, want %q", c.typ, c.data, r.TargetIP, r.TargetGeo, c.want)
+		}
+	}
+}

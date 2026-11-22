@@ -36,6 +36,10 @@ const showAdvanced = ref(false)
 const scheme = ref('https') // http probe: used when the target has no scheme of its own
 const httpMode = ref('simple') // simple = one plain GET; full = every request option
 const targetBox = ref(null)
+// 清爽模式: only the result, no navigation, form or node list. Esc leaves it.
+const zen = ref(false)
+function onKeydown(e) { if (e.key === 'Escape' && zen.value && !e.defaultPrevented) zen.value = false }
+watch(zen, (on) => document.body.classList.toggle('zen', on))
 
 const DEFAULTS = {
   ping: { count: 10, interval_ms: 500, timeout_ms: 2000, packet_size: 56, ip_version: '' },
@@ -258,22 +262,24 @@ onMounted(() => {
   if (!route.taskId) loadLastTask()
   loadAgents()
   agentTimer = setInterval(loadAgents, 8000)
+  window.addEventListener('keydown', onKeydown)
 })
-onBeforeUnmount(() => { clearInterval(agentTimer); closeStream() })
+watch(() => [route.page, task.value], ([page, t]) => { if (page !== 'probe' || !t) zen.value = false })
+onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeEventListener('keydown', onKeydown); document.body.classList.remove('zen') })
 </script>
 
 <template>
   <div>
     <StatCards v-if="!task" />
 
-    <div class="notice" v-if="lastTask && !task">
+    <div class="notice" v-if="lastTask && !task && !zen">
       <span>上次检测：<span class="badge" :class="lastTask.type">{{ TYPE_INFO[lastTask.type]?.label || lastTask.type }}</span> <span class="mono">{{ lastTask.target }}</span> <span class="sub" :title="fmtTime(lastTask.at)">{{ timeAgo(lastTask.at) }}</span></span>
       <span class="spacer"></span>
       <button class="btn sm" type="button" @click="navigate(taskPath(lastTask.id))">继续查看</button>
       <button class="btn sm link" type="button" @click="dismissLastTask">忽略</button>
     </div>
 
-    <div class="card probe-form">
+    <div class="card probe-form" v-show="!zen">
       <div class="row" style="margin-bottom:14px">
         <div class="tabs types" role="tablist" aria-label="检测类型">
           <button v-for="t in PROBE_TYPES" :key="t" type="button" role="tab" :aria-selected="type === t" :class="{ active: type === t }" @click="setType(t)">{{ TYPE_INFO[t].label }}</button>
@@ -376,12 +382,12 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream() })
       </div>
     </div>
 
-    <NodePicker v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" />
+    <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" />
 
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
 
     <div class="card" v-if="task">
-      <TaskResults :task="task" :results="results" :running="running" />
+      <TaskResults :task="task" :results="results" :running="running" v-model:zen="zen" />
     </div>
     <div class="card empty" v-else-if="opening">正在加载检测结果…</div>
     <div class="card empty" v-else>输入目标并点击「{{ hasContinuous ? '检测' : '发起检测' }}」，各节点结果会实时显示在这里。</div>

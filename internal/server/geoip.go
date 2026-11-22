@@ -215,6 +215,56 @@ func (g *GeoIP) Offline(ipStr string) string {
 	return label
 }
 
+// AnnotateDNS fills DNSAnswer.Geo for the address records of attempts.
+func (g *GeoIP) AnnotateDNS(attempts []protocol.DNSAttempt) {
+	if g == nil || !g.HasOffline() {
+		return
+	}
+	for i := range attempts {
+		for j, a := range attempts[i].Answers {
+			if a.Type == "A" || a.Type == "AAAA" {
+				attempts[i].Answers[j].Geo = g.Offline(a.Value)
+			}
+		}
+	}
+}
+
+// AnnotateTarget fills a result's TargetIP / TargetGeo from its payload: the
+// address the node probed and, with an offline db, where it is.
+func (g *GeoIP) AnnotateTarget(typ protocol.TaskType, r *protocol.AgentResult) {
+	if len(r.Data) == 0 {
+		return
+	}
+	ip := ""
+	switch typ {
+	case protocol.TaskPing, protocol.TaskTCPing, protocol.TaskMTR:
+		var d struct {
+			IP string `json:"ip"`
+		}
+		_ = json.Unmarshal(r.Data, &d)
+		ip = d.IP
+	case protocol.TaskHTTP:
+		var d struct {
+			Attempts []struct {
+				IP string `json:"ip"`
+			} `json:"attempts"`
+		}
+		_ = json.Unmarshal(r.Data, &d)
+		for _, a := range d.Attempts {
+			if a.IP != "" {
+				ip = a.IP
+			}
+		}
+	}
+	if ip == "" {
+		return
+	}
+	r.TargetIP = ip
+	if g != nil && g.HasOffline() {
+		r.TargetGeo = g.Offline(ip)
+	}
+}
+
 // AnnotateHops fills MTRHop.Geo for every host when an offline db is loaded.
 func (g *GeoIP) AnnotateHops(hops []protocol.MTRHop) {
 	if g == nil || !g.HasOffline() {

@@ -1,9 +1,20 @@
 <script setup>
-import { ref } from 'vue'
-import { ms, bytes, mbps, statusLabel, agentPlace, fmtTime } from '../fmt.js'
-import ErrorBadge from './ErrorBadge.vue'
+import { ref, watch } from 'vue'
+import { ms, bytes, mbps, fmtTime, bucketClass } from '../fmt.js'
+import { useSort } from '../useSort.js'
+import SortTh from './SortTh.vue'
+import StatusCell from './StatusCell.vue'
 
-defineProps({ task: Object, results: Array })
+const props = defineProps({ task: Object, results: Array })
+const emit = defineEmits(['order'])
+const phase = (k) => (r) => (r.avg?.total_ms !== undefined ? r.avg[k] : undefined)
+const sort = useSort(() => props.results, {
+  name: (r) => r.agent_name, place: (r) => r.place, line: (r) => r.line, ip: (r) => r.ip, code: (r) => r.last?.status_code || undefined,
+  dns: phase('dns_ms'), connect: phase('connect_ms'), tls: phase('tls_ms'), ttfb: phase('ttfb_ms'), transfer: phase('transfer_ms'), total: phase('total_ms'),
+  size: (r) => (r.last?.ok ? r.last.body_bytes : undefined), speed: (r) => r.throughput,
+})
+const rows = sort.sorted
+watch(rows, (v) => emit('order', v), { immediate: true })
 const open = ref({})
 // 198.18.0.0/15: the node's DNS answers come from a transparent proxy's
 // fake-IP pool, so the request was relayed by the proxy.
@@ -24,30 +35,32 @@ function phaseWidths(t) {
       <thead>
         <tr>
           <th></th>
-          <th>节点</th>
-          <th>位置 / 运营商</th>
-          <th>IP</th>
-          <th>状态码</th>
+          <SortTh :sort="sort" k="name">检测点</SortTh>
+          <SortTh :sort="sort" k="place">地域</SortTh>
+          <SortTh :sort="sort" k="line">线路</SortTh>
+          <SortTh :sort="sort" k="ip">响应 IP</SortTh>
+          <SortTh :sort="sort" k="code">HTTP 状态</SortTh>
           <th>协议</th>
-          <th class="num">DNS</th>
-          <th class="num">连接</th>
-          <th class="num">TLS</th>
-          <th class="num">首字节</th>
-          <th class="num">下载</th>
-          <th class="num">总耗时</th>
-          <th class="num">大小</th>
-          <th class="num" v-if="task.params?.speed_test">速率</th>
+          <SortTh :sort="sort" k="dns" num>DNS</SortTh>
+          <SortTh :sort="sort" k="connect" num>连接</SortTh>
+          <SortTh :sort="sort" k="tls" num>TLS</SortTh>
+          <SortTh :sort="sort" k="ttfb" num>首字节</SortTh>
+          <SortTh :sort="sort" k="transfer" num>下载</SortTh>
+          <SortTh :sort="sort" k="total" num title="整个请求的耗时（ms）：解析、连接、TLS、等待首字节、下载">完整耗时</SortTh>
+          <SortTh :sort="sort" k="size" num>大小</SortTh>
+          <SortTh v-if="task.params?.speed_test" :sort="sort" k="speed" num>速率</SortTh>
           <th>耗时分布</th>
           <th>状态</th>
         </tr>
       </thead>
       <tbody>
-        <template v-for="r in results" :key="r.agent_id">
+        <template v-for="r in rows" :key="r.agent_id">
           <tr class="clickable" @click="toggle(r.agent_id)">
-            <td class="sub">{{ open[r.agent_id] ? '▾' : '▸' }}</td>
+            <td class="sub"><button type="button" class="th-btn" :aria-expanded="!!open[r.agent_id]" :aria-label="`${r.agent_name} 的请求详情与响应头`" @click.stop="toggle(r.agent_id)">{{ open[r.agent_id] ? '▾' : '▸' }}</button></td>
             <td><b>{{ r.agent_name }}</b><span v-if="r.attempts?.length > 1" class="sub"> ×{{ r.attempts.length }}</span></td>
-            <td class="sub">{{ agentPlace(r) || '-' }}</td>
-            <td class="mono">{{ r.last?.ip || '-' }}<span v-if="r.fakeIP" class="badge warn" style="margin-left:6px" :title="FAKE_IP_HINT">fake-IP</span></td>
+            <td class="sub">{{ r.place || '-' }}</td>
+            <td><span class="badge" v-if="r.line">{{ r.line }}</span><span v-else class="sub">-</span></td>
+            <td class="mono">{{ r.ip || '-' }}<span v-if="r.fakeIP" class="badge warn" style="margin-left:6px" :title="FAKE_IP_HINT">fake-IP</span><div class="sub ipgeo" v-if="r.ipGeo && !r.fakeIP">{{ r.ipGeo }}</div></td>
             <td>
               <span v-if="r.last?.status_code" class="badge" :class="codeClass(r.last.status_code)">{{ r.last.status_code }}</span>
               <span v-else class="sub">-</span>
@@ -58,7 +71,7 @@ function phaseWidths(t) {
             <td class="num">{{ r.avg?.total_ms !== undefined ? ms(r.avg.tls_ms) : '-' }}</td>
             <td class="num">{{ r.avg?.total_ms !== undefined ? ms(r.avg.ttfb_ms) : '-' }}</td>
             <td class="num">{{ r.avg?.total_ms !== undefined ? ms(r.avg.transfer_ms) : '-' }}</td>
-            <td class="num"><b>{{ r.avg?.total_ms !== undefined ? ms(r.avg.total_ms) : '-' }}</b></td>
+            <td class="num" :class="bucketClass('http', r.avg?.total_ms)"><b>{{ r.avg?.total_ms !== undefined ? ms(r.avg.total_ms) : '-' }}</b></td>
             <td class="num">{{ r.last?.ok ? bytes(r.last.body_bytes) : '-' }}</td>
             <td class="num" v-if="task.params?.speed_test"><b>{{ r.throughput ? mbps(r.throughput) : '-' }}</b></td>
             <td>
@@ -66,15 +79,10 @@ function phaseWidths(t) {
                 <i v-for="p in phaseWidths(r.avg)" :key="p.k" :class="p.k" :style="{ width: p.w + '%' }" :title="p.k + ' ' + ms(p.v) + 'ms'"></i>
               </div>
             </td>
-            <td>
-              <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-              <ErrorBadge v-else-if="r.status === 'error' || (r.last && !r.last.ok)" :message="r.error || r.last?.error || '失败'" />
-              <ErrorBadge v-else-if="r.assertFail" :message="'断言未通过：\n' + r.failedAssertions.join('\n')" />
-              <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
-            </td>
+            <td @click.stop><StatusCell :r="r" /></td>
           </tr>
           <tr v-if="open[r.agent_id]">
-            <td colspan="16" style="white-space:normal">
+            <td colspan="17" style="white-space:normal">
               <div class="detail" v-for="a in r.attempts" :key="a.seq">
                 <div class="row" style="margin-bottom:6px">
                   <span class="badge">#{{ a.seq + 1 }}</span>

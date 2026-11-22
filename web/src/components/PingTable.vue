@@ -1,29 +1,26 @@
 <script setup>
-import { ref, computed } from 'vue'
-import { ms, pct, lossClass, rttClass, statusLabel, agentPlace } from '../fmt.js'
+import { computed, watch } from 'vue'
+import { ms, pct, lossClass, bucketClass } from '../fmt.js'
+import { useSort } from '../useSort.js'
 import Sparkline from './Sparkline.vue'
-import ErrorBadge from './ErrorBadge.vue'
+import SortTh from './SortTh.vue'
+import StatusCell from './StatusCell.vue'
 
 const props = defineProps({ task: Object, results: Array })
-const sortKey = ref('')
-const sortDir = ref(1)
-function sortBy(k) {
-  if (sortKey.value === k) sortDir.value = -sortDir.value
-  else { sortKey.value = k; sortDir.value = 1 }
-}
-const rows = computed(() => {
-  const arr = [...props.results]
-  if (!sortKey.value) return arr
-  const k = sortKey.value
-  return arr.sort((a, b) => {
-    const av = a.stats?.[k], bv = b.stats?.[k]
-    if (av === undefined && bv === undefined) return 0
-    if (av === undefined) return 1
-    if (bv === undefined) return -1
-    return (av - bv) * sortDir.value
-  })
+const emit = defineEmits(['order'])
+const got = (r) => r.stats?.received > 0
+const sort = useSort(() => props.results, {
+  name: (r) => r.agent_name, place: (r) => r.place, line: (r) => r.line, ip: (r) => r.ip,
+  loss: (r) => (r.stats?.sent ? r.stats.loss_pct : undefined),
+  latest: (r) => r.latest, min: (r) => (got(r) ? r.stats.min_ms : undefined), avg: (r) => (got(r) ? r.stats.avg_ms : undefined),
+  max: (r) => (got(r) ? r.stats.max_ms : undefined), p95: (r) => r.p95, stddev: (r) => (got(r) ? r.stats.stddev_ms : undefined),
 })
+const rows = sort.sorted
+watch(rows, (v) => emit('order', v), { immediate: true })
 const count = computed(() => props.task.params?.count || 10)
+// A continuous run is about stability over time: it gets the latest sample
+// and the 95th percentile next to the usual figures.
+const continuous = computed(() => !!props.task.params?.continuous)
 </script>
 
 <template>
@@ -31,36 +28,38 @@ const count = computed(() => props.task.params?.count || 10)
     <table class="grid">
       <thead>
         <tr>
-          <th>节点</th>
-          <th>位置 / 运营商</th>
-          <th>目标 IP</th>
+          <SortTh :sort="sort" k="name">检测点</SortTh>
+          <SortTh :sort="sort" k="place">地域</SortTh>
+          <SortTh :sort="sort" k="line">线路</SortTh>
+          <SortTh :sort="sort" k="ip">响应 IP</SortTh>
           <th class="num">发送/接收</th>
-          <th class="num sortable" @click="sortBy('loss_pct')">丢包 {{ sortKey === 'loss_pct' ? (sortDir > 0 ? '↑' : '↓') : '' }}</th>
-          <th class="num sortable" @click="sortBy('min_ms')">最小</th>
-          <th class="num sortable" @click="sortBy('avg_ms')">平均 {{ sortKey === 'avg_ms' ? (sortDir > 0 ? '↑' : '↓') : '' }}</th>
-          <th class="num sortable" @click="sortBy('max_ms')">最大</th>
-          <th class="num sortable" @click="sortBy('stddev_ms')">抖动</th>
-          <th>趋势</th>
+          <SortTh :sort="sort" k="loss" num>丢包率</SortTh>
+          <SortTh v-if="continuous" :sort="sort" k="latest" num>最新</SortTh>
+          <SortTh :sort="sort" k="min" num>最快</SortTh>
+          <SortTh :sort="sort" k="avg" num>平均</SortTh>
+          <SortTh :sort="sort" k="max" num>最慢</SortTh>
+          <SortTh v-if="continuous" :sort="sort" k="p95" num title="95% 的样本不超过这个值，比平均值更能反映稳定体验">95% 延迟</SortTh>
+          <SortTh :sort="sort" k="stddev" num>抖动</SortTh>
+          <th>质量走势</th>
           <th>状态</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.agent_id">
           <td><b>{{ r.agent_name }}</b></td>
-          <td class="sub">{{ agentPlace(r) || '-' }}</td>
-          <td class="mono">{{ r.ip || '-' }}<span v-if="r.port" class="sub">:{{ r.port }}</span></td>
+          <td class="sub">{{ r.place || '-' }}</td>
+          <td><span class="badge" v-if="r.line">{{ r.line }}</span><span v-else class="sub">-</span></td>
+          <td class="mono">{{ r.ip || '-' }}<span v-if="r.port" class="sub">:{{ r.port }}</span><div class="sub ipgeo" v-if="r.ipGeo">{{ r.ipGeo }}</div></td>
           <td class="num">{{ r.stats?.sent ?? 0 }}/{{ r.stats?.received ?? 0 }}</td>
           <td class="num" :class="lossClass(r.stats?.loss_pct)">{{ r.stats?.sent ? pct(r.stats.loss_pct) : '-' }}</td>
-          <td class="num">{{ r.stats?.received ? ms(r.stats.min_ms) : '-' }}</td>
-          <td class="num" :class="rttClass(r.stats?.avg_ms)"><b>{{ r.stats?.received ? ms(r.stats.avg_ms) : '-' }}</b></td>
-          <td class="num">{{ r.stats?.received ? ms(r.stats.max_ms) : '-' }}</td>
-          <td class="num">{{ r.stats?.received ? ms(r.stats.stddev_ms) : '-' }}</td>
+          <td class="num" v-if="continuous" :class="bucketClass(task.type, r.latest)">{{ ms(r.latest) }}</td>
+          <td class="num">{{ got(r) ? ms(r.stats.min_ms) : '-' }}</td>
+          <td class="num" :class="bucketClass(task.type, got(r) ? r.stats.avg_ms : undefined)"><b>{{ got(r) ? ms(r.stats.avg_ms) : '-' }}</b></td>
+          <td class="num">{{ got(r) ? ms(r.stats.max_ms) : '-' }}</td>
+          <td class="num" v-if="continuous" :class="bucketClass(task.type, r.p95)">{{ ms(r.p95) }}</td>
+          <td class="num">{{ got(r) ? ms(r.stats.stddev_ms) : '-' }}</td>
           <td><Sparkline :replies="r.replies || []" :total="r.live ? count : 0" /></td>
-          <td>
-            <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-            <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
-            <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
-          </td>
+          <td><StatusCell :r="r" /></td>
         </tr>
       </tbody>
     </table>

@@ -5,7 +5,9 @@ import { errorLabel } from '../fmt.js'
 // Short badge in the table; the full message opens in a fixed-position
 // popover teleported to <body> so it never widens the table or gets clipped
 // by the horizontal scroll container.
-const props = defineProps({ message: { type: String, default: '' } })
+// label overrides the category worked out from the message, for failures that
+// are not errors as such (an assertion that did not hold, a trace that fell short).
+const props = defineProps({ message: { type: String, default: '' }, label: { type: String, default: '' } })
 const open = ref(false)
 const pos = ref({ top: 0, left: 0 })
 const copied = ref(false)
@@ -37,10 +39,10 @@ onBeforeUnmount(close)
 </script>
 
 <template>
-  <span class="badge error clickable" title="点击查看详情" @click.stop="toggle">{{ errorLabel(message) }}</span>
+  <span class="badge error clickable" title="点击查看详情" @click.stop="toggle">{{ label || errorLabel(message) }}</span>
   <Teleport to="body">
     <div v-if="open" class="popover" :style="{ top: pos.top + 'px', left: pos.left + 'px', width: pos.width + 'px' }" @click.stop>
-      <div class="popover-title">错误详情</div>
+      <div class="popover-title">详情</div>
       <div class="popover-text">{{ message }}</div>
       <div class="popover-actions">
         <button class="btn sm" type="button" @click="copy">{{ copied ? '已复制' : '复制' }}</button>

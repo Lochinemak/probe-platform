@@ -1,26 +1,40 @@
 <script setup>
-import { ms, pct, lossClass, statusLabel, agentPlace } from '../fmt.js'
-import ErrorBadge from './ErrorBadge.vue'
-defineProps({ task: Object, results: Array })
+import { reactive } from 'vue'
+import { ms, pct, lossClass, bucketClass } from '../fmt.js'
+import StatusCell from './StatusCell.vue'
+const props = defineProps({ task: Object, results: Array })
+// Each node's hop table can be folded away; with many nodes they start folded
+// so the summaries can be compared at a glance.
+const folded = reactive({})
+const isOpen = (r) => (folded[r.agent_id] === undefined ? props.results.length <= 3 : !folded[r.agent_id])
+function toggle(r) { folded[r.agent_id] = isOpen(r) }
 </script>
 
 <template>
   <div>
     <div class="card mtr-card" v-for="r in results" :key="r.agent_id">
       <div class="mtr-head">
+        <button type="button" class="th-btn" :aria-expanded="isOpen(r)" :aria-label="`${r.agent_name} 的逐跳明细`" @click="toggle(r)">{{ isOpen(r) ? '▾' : '▸' }}</button>
         <span class="name">{{ r.agent_name }}</span>
-        <span class="sub">{{ agentPlace(r) }}</span>
+        <span class="sub">{{ r.place }}</span>
+        <span class="badge" v-if="r.line">{{ r.line }}</span>
         <span class="mono sub" v-if="r.ip">→ {{ r.ip }}</span>
+        <span class="sub" v-if="r.ipGeo">{{ r.ipGeo }}</span>
         <span class="badge" v-if="r.protocol">{{ r.protocol.toUpperCase() }}<template v-if="r.port">:{{ r.port }}</template></span>
         <span class="badge" v-if="r.rounds">{{ r.rounds }} 轮</span>
         <span class="badge ok" v-if="r.reached">已到达目标</span>
         <span class="badge warn" v-else-if="r.status === 'done'">未到达目标</span>
         <span class="spacer"></span>
-        <span v-if="r.status === 'running'" class="badge running"><span class="pulse"></span>{{ statusLabel(r.status) }}</span>
-        <ErrorBadge v-else-if="r.status === 'error'" :message="r.error || '失败'" />
-        <span v-else class="badge" :class="r.status">{{ statusLabel(r) }}</span>
+        <StatusCell v-if="r.live || r.status === 'error' || r.stopped" :r="r" />
       </div>
-      <div class="table-wrap" v-if="r.hops?.length">
+      <div class="mtr-summary" v-if="r.hops?.length">
+        <span>跳数 <b>{{ r.hopCount }}</b></span>
+        <span>最后一跳 <b class="mono">{{ r.lastHop?.hosts?.[0] || '* * *' }}</b></span>
+        <span>已采样 <b>{{ r.sampled }}</b></span>
+        <span>末跳丢包 <b :class="lossClass(r.lastHop?.loss_pct)">{{ r.lastHop ? pct(r.lastHop.loss_pct) : '-' }}</b></span>
+        <span>平均延迟 <b :class="bucketClass('mtr', r.metric)">{{ r.metric !== undefined ? ms(r.metric) + ' ms' : '-' }}</b></span>
+      </div>
+      <div class="table-wrap" v-if="r.hops?.length && isOpen(r)">
         <table class="grid">
           <thead>
             <tr>

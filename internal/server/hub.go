@@ -800,11 +800,28 @@ func (h *Hub) handleProgress(ac *agentConn, p protocol.Progress) {
 			}
 		}
 	}
+	if h.geo != nil && tr.task.Type == protocol.TaskDNS && p.Kind == "attempt" {
+		var a protocol.DNSAttempt
+		if json.Unmarshal(p.Data, &a) == nil {
+			one := []protocol.DNSAttempt{a}
+			h.geo.AnnotateDNS(one)
+			if b, err := json.Marshal(one[0]); err == nil {
+				p.Data = b
+			}
+		}
+	}
+	resolved := ""
+	if p.Kind == "resolved" && json.Unmarshal(p.Data, &resolved) == nil && resolved != "" && h.geo != nil && h.geo.HasOffline() {
+		p.Geo = h.geo.Offline(resolved)
+	}
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	res := tr.results[ac.id]
 	if res == nil || res.Status != protocol.StatusRunning || tr.conns[ac.id] != ac {
 		return
+	}
+	if resolved != "" {
+		res.TargetIP, res.TargetGeo = resolved, p.Geo
 	}
 	if len(res.Progress) < maxProgressEvents {
 		res.Progress = append(res.Progress, p)
@@ -826,6 +843,15 @@ func (h *Hub) handleResult(ac *agentConn, r protocol.Result) {
 			}
 		}
 	}
+	if h.geo != nil && tr.task.Type == protocol.TaskDNS && len(r.Data) > 0 {
+		var dr protocol.DNSResult
+		if json.Unmarshal(r.Data, &dr) == nil {
+			h.geo.AnnotateDNS(dr.Attempts)
+			if b, err := json.Marshal(dr); err == nil {
+				r.Data = b
+			}
+		}
+	}
 	tr.mu.Lock()
 	res := tr.results[ac.id]
 	if res == nil || tr.conns[ac.id] != ac {
@@ -834,6 +860,7 @@ func (h *Hub) handleResult(ac *agentConn, r protocol.Result) {
 	}
 	res.Data = r.Data
 	res.DurationMs = r.DurationMs
+	h.geo.AnnotateTarget(tr.task.Type, res)
 	status, errMsg := protocol.StatusDone, r.Error
 	if !r.OK {
 		status = protocol.StatusError
@@ -1039,6 +1066,9 @@ func (h *Hub) LoadTask(taskID string) (*protocol.Event, error) {
 	results, err := h.store.ListResults(taskID)
 	if err != nil {
 		return nil, err
+	}
+	for _, r := range results {
+		h.geo.AnnotateTarget(task.Type, r)
 	}
 	return &protocol.Event{Type: "snapshot", Task: task, Results: results, Done: true}, nil
 }

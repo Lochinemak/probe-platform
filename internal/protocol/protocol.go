@@ -275,6 +275,9 @@ type Progress struct {
 	Seq    int             `json:"seq"`
 	Kind   string          `json:"kind"` // "reply", "attempt", "hops", "resolved"
 	Data   json.RawMessage `json:"data"`
+	// Geo is added by the server to a "resolved" event: where the resolved
+	// address is, from the offline IP database.
+	Geo string `json:"geo,omitempty"`
 }
 
 // Result is the final frame for a task from one agent.
@@ -415,6 +418,7 @@ type DNSAnswer struct {
 	Type  string `json:"type"`
 	TTL   uint32 `json:"ttl"`
 	Value string `json:"value"`
+	Geo   string `json:"geo,omitempty"` // A / AAAA: where the address is; added by the server
 }
 
 // DNSAttempt is one DNS query.
@@ -505,12 +509,17 @@ const ErrStopped = "stopped"
 
 // AgentResult is the dashboard view of one agent's outcome for a task.
 type AgentResult struct {
-	TaskID     string          `json:"task_id"`
-	AgentID    string          `json:"agent_id"`
-	AgentName  string          `json:"agent_name"`
-	Location   string          `json:"location,omitempty"`
-	ISP        string          `json:"isp,omitempty"`
-	Geo        *Geo            `json:"geo,omitempty"` // the node's place and line when the task ran
+	TaskID    string `json:"task_id"`
+	AgentID   string `json:"agent_id"`
+	AgentName string `json:"agent_name"`
+	Location  string `json:"location,omitempty"`
+	ISP       string `json:"isp,omitempty"`
+	Geo       *Geo   `json:"geo,omitempty"` // the node's place and line when the task ran
+	// TargetIP is the address this node probed (what the target resolved to
+	// for it) and TargetGeo where that address is. The server fills both from
+	// the result; they are not stored.
+	TargetIP   string          `json:"target_ip,omitempty"`
+	TargetGeo  string          `json:"target_geo,omitempty"`
 	Status     ResultStatus    `json:"status"`
 	Error      string          `json:"error,omitempty"`
 	DurationMs float64         `json:"duration_ms,omitempty"`

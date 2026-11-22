@@ -7,6 +7,13 @@ export function ms(v) {
   return Math.round(v).toString()
 }
 
+// dur shows a duration with its unit: milliseconds up to a second, seconds
+// beyond (HTTP requests routinely take several).
+export function dur(v) {
+  if (v === undefined || v === null || Number.isNaN(v)) return '-'
+  return v >= 1000 ? (v / 1000).toFixed(2) + ' s' : ms(v) + ' ms'
+}
+
 export function pct(v) {
   if (v === undefined || v === null) return '-'
   return (Math.round(v * 10) / 10) + '%'
@@ -58,21 +65,57 @@ export function mbps(v) {
   return v >= 100 ? Math.round(v) + ' Mbps' : v.toFixed(1) + ' Mbps'
 }
 
-// Compact label for an error message; the full text is shown in a popover.
-export function errorLabel(msg) {
+// errorCategory sorts an error message into one of a few kinds: { key, label }.
+// The label is what tables show; the full text opens in a popover. Order
+// matters: the more specific cause is tested first ("lookup x: i/o timeout"
+// is a DNS failure, "dial tcp: i/o timeout" a connect timeout).
+const ERROR_KINDS = [
+  ['fakeip', 'fake-IP', ['fake-ip']],
+  ['stopped', '已停止', ['stopped']],
+  ['cancelled', '已取消', ['cancelled', 'canceled']],
+  ['offline', '节点离线', ['agent offline', 'agent disconnected', 'disconnected', 'send queue full']],
+  ['unsupported', '节点不支持', ['unknown task type', 'unsupported', 'not supported', '节点版本过旧']],
+  ['denied', '无权限', ['not permitted', 'raw icmp', 'cap_net_raw', 'permission denied']],
+  ['policy', '目标受限', ['不是公网地址', 'not a public address', 'public_only']],
+  ['dns', 'DNS 失败', ['no such host', 'nxdomain', 'lookup ', 'server misbehaving', 'no answer', 'rcode']],
+  ['tls', 'TLS 失败', ['certificate', 'x509', 'tls:', 'tls handshake', 'handshake failure']],
+  ['refused', '端口拒绝', ['connection refused', 'refused']],
+  ['reset', '连接重置', ['connection reset', 'reset by peer', 'broken pipe', 'unexpected eof']],
+  ['unreachable', '网络不可达', ['network is unreachable', 'no route to host', 'unreachable']],
+  ['connect_timeout', '连接超时', ['dial tcp', 'connect: ', 'connection timed out']],
+  ['timeout', '超时', ['timeout', 'timed out', 'deadline exceeded']],
+  ['loss', '全部丢包', ['100% loss', 'no reply']],
+]
+export function errorCategory(msg) {
   const m = String(msg || '').toLowerCase()
-  if (!m) return '失败'
-  if (m.includes('fake-ip')) return 'fake-IP'
-  if (m.includes('timeout') || m.includes('deadline')) return '超时'
-  if (m.includes('disconnected')) return '节点断开'
-  if (m.includes('offline')) return '节点离线'
-  if (m.includes('cancelled')) return '已取消'
-  if (m.includes('no such host')) return '域名不存在'
-  if (m.includes('refused')) return '连接被拒'
-  if (m.includes('unreachable')) return '不可达'
-  if (m.includes('not permitted') || m.includes('raw icmp') || m.includes('cap_net_raw')) return '无权限'
-  if (m.includes('certificate') || m.includes('x509') || m.includes('tls')) return 'TLS 错误'
-  return '失败'
+  for (const [key, label, words] of ERROR_KINDS) {
+    if (!words.some((w) => m.includes(w))) continue
+    // "dial tcp …" only says what was being done; it is a connect timeout
+    // when it also timed out, otherwise keep looking.
+    if (key === 'connect_timeout' && !/timeout|timed out|deadline/.test(m)) continue
+    return { key, label }
+  }
+  return { key: 'error', label: '失败' }
+}
+export function errorLabel(msg) { return errorCategory(msg).label }
+
+// Latency colour scale, shared by the tables, the legend and the maps. A link
+// RTT (ping, tcping, dns, mtr) is graded in milliseconds; a whole HTTP request
+// takes far longer and is graded in seconds. bucketOf returns 0 (best) … 6
+// (worst), or -1 when there is no value.
+const BUCKETS = {
+  ms: { edges: [50, 100, 150, 200, 250, 300], labels: ['≤50ms', '≤100ms', '≤150ms', '≤200ms', '≤250ms', '≤300ms', '>300ms'] },
+  s: { edges: [500, 1000, 2000, 3000, 5000, 10000], labels: ['≤0.5s', '≤1s', '≤2s', '≤3s', '≤5s', '≤10s', '>10s'] },
+}
+export function latencyScale(type) { return BUCKETS[type === 'http' ? 's' : 'ms'] }
+export function bucketOf(type, v) {
+  if (v === undefined || v === null || Number.isNaN(v)) return -1
+  const i = latencyScale(type).edges.findIndex((e) => v <= e)
+  return i < 0 ? 6 : i
+}
+export function bucketClass(type, v) {
+  const b = bucketOf(type, v)
+  return b < 0 ? '' : 'lat-' + b
 }
 
 // statusLabel takes a status or a whole result; a result that finished
