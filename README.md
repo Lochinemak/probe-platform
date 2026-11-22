@@ -8,7 +8,7 @@
 | **TCPing** | TCP 握手延迟、端口连通性；同样支持持续检测 |
 | **HTTP Ping** | 状态码、协议版本、TLS 与证书信息，DNS / TCP / TLS / 首字节 / 下载分阶段耗时，带状态码的跳转链；自定义方法 / Header / Body；状态码、关键字、耗时断言；按时间窗口的下载测速 |
 | **MTR** | 原生 Go 实现（不依赖系统 `mtr`），ICMP / TCP SYN / UDP 三种探针，多轮逐跳丢包与延迟，支持 IPv4 / IPv6，可用 ip2region 离线库标注每跳的地区与运营商 |
-| **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
+| **DNS** | 各节点解析对比：A / AAAA / CNAME / MX / TXT / NS / PTR / SOA / SRV / CAA / HTTPS / SVCB / DS / DNSKEY / TLSA，记录与 TTL、RCode、耗时，可指定 DNS 服务器（UDP / TCP / DoH），fake-IP 应答会被标出 |
 | **UDP 探测** | 向 UDP 端口发一个数据报：收到回应、收到「端口不可达」还是没有任何响应；53 端口自动发 DNS 查询 |
 | **TLS 证书** | 握手耗时、协议版本与套件、ALPN、完整证书链（主体、适用名称、签发者、有效期、密钥类型）、在节点信任库里是否校验通过、剩余天数。证书过期或自签也能拿到证书链 |
 | **DNS 对比** | 每个节点同时问多个解析器（系统 DNS、阿里、腾讯、Cloudflare…），看答案是否一致，不一致时按答案分组 |
@@ -241,6 +241,7 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 | `/s/<分享码>` | 分享出去的检测结果：只读，不用登录就能打开（关闭了游客访问也一样），见下面「分享与截图」 |
 | `/ip` | IP 定位：查询任意公网 IP 的归属地、运营商、线路类型（开启在线查询时还有 ASN、网络类型、估算坐标）；对照「本站看到的出口」和「境外站点看到的出口」判断是否按目的地分流 |
 | `/dns-servers` | 公共 DNS 目录：全国 / 全球公共解析器与运营商省级解析器的 IPv4 / IPv6 / DoH / DoT 地址，可复制，或点「用它解析」直接带到 DNS 检测 |
+| `/dns-global` | 全球 DNS 扩散检测：改了解析记录之后看新值到了哪里。从根服务器一路查到负责这个域名的区（父区委派）→ 逐台问该区的权威服务器（应答与 SOA 序列号）→ 问目录里的公共解析器，和参照值比对，给出确认新值率、可比匹配率、响应覆盖率、不可判定数。参照值依次取：你填的期望值、权威服务器一致的应答、多数解析器的结果。地址带参数（`?name=&type=&tier=&expect=`），打开即开始 |
 | `/coverage` | 节点覆盖：节点分布地图（有在线节点 / 全部离线 / 暂无节点）、点击地区看那里各线路的在线情况、地区排行、线路汇总 |
 | `/monitors` `/agents` `/history` `/notify` `/settings` | 监控、节点、历史、通知、设置（「历史」里的每一行都链接到 `/t/<任务 ID>`） |
 
@@ -325,6 +326,10 @@ curl -s localhost:8080/api/ip/me
 curl -s "localhost:8080/api/ip/lookup?ip=223.5.5.5"
 # 公共 DNS 目录（随二进制内置的 internal/server/data/resolvers.json）
 curl -s localhost:8080/api/dns/resolvers
+# 全球 DNS 扩散检测（SSE，事件 start / stage / row / done）：tier=quick|full，expect 可选；
+# 管理员可加 agent=<节点 ID> 让「公共解析器」这一步由该节点发出（在节点上是几条 dns_compare 任务）。
+# 游客每 IP 每分钟 3 次，全站同时 2 个，单次最多 150 次查询、20 秒；同样的请求 30 秒内返回缓存
+curl -sN "localhost:8080/api/dns/propagation?name=www.example.com&type=A&tier=quick"
 # 首页统计：在线 / 总节点、大陆 / 其他 / 未识别、24 小时检测次数与节点执行成功率（游客可读，缓存 30 秒）
 curl localhost:8080/api/stats
 # 节点管理（管理员）：创建节点并拿到 token、查看 / 重置 token、删除（即吊销）
@@ -411,6 +416,7 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 - **反向代理后请确认 `PROBE_PROXY_HOPS`。** `X-Forwarded-For` 是客户端起头、每层代理追加的列表，所以只有自己的代理追加的那几个条目可信。server 默认按一层代理取倒数第一个；如果照抄 `deploy/nginx.conf.example`（`proxy_add_x_forwarded_for`）就不用改。取错方向会让登录爆破限制和游客频率限制被一个请求头绕过，审计日志里的 IP 也会是伪造的。
 - agent 只接受 server 下发的九种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB、UDP 负载 ≤ 1024 字节、DNS 对比 ≤ 8 个解析器）。
 - **server 只把 agent 声明支持的东西发给它。** UDP / TLS / DNS 对比 / 节点状态和 `connect_to` / `resolver` 两个参数需要较新的 agent；版本过旧的节点（通常是还没重新拉镜像的 Docker 节点）会直接得到「节点版本过旧」的失败结果，而不是忽略新参数、把一次测错了对象的结果当成正常结果交回来。拨测页里这类节点会置灰并写明原因。
+- **全球 DNS 扩散检测由 server 自己发 DNS 查询。** 一个域名的 NS 记录可以指向任何地址，所以每一次查询都只发往公网地址的 53 端口（内网、回环、链路本地等地址直接拒绝，不会发出），单次检测最多 150 次查询、20 秒，全站同时 2 个，游客每 IP 每分钟 3 次。查询从 server 所在的网络发出：server 在中国大陆时，到境外解析器的结果可能受线路影响，超时计入「不可判定」而不是「不同」；应答里出现 fake-IP 时页面会直接提示结果无效。结果不落库、不能分享。
 - **游客的参数是白名单。** 每种探测类型只把游客允许使用的参数逐个抄过去，新加的参数默认对游客无效；没有专门写过游客校验的探测类型会被拒绝。游客的 UDP 探测只能发送内置的 DNS 查询或固定文本，不能自定义负载；`connect_to` 和 `resolver` 同样必须是公网地址。
 - **agent 自更新只在可信连接上进行。** 更新提供的 SHA-256 和二进制来自同一条连接，只能防传输损坏，防不了恶意服务端；因此 server 地址是明文 http（回环除外）或开了 `PROBE_INSECURE=true` 时，agent 会拒绝自更新——否则路径上的人就能投递一个以 root / LocalSystem 运行的二进制。
 - **通知渠道的密钥只写不读。** Bot token、SMTP 密码、Webhook 认证头等不会通过 API 返回，页面上只显示「已保存」；保存时留空表示不修改。

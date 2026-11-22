@@ -84,3 +84,55 @@ function stream(url, onEvent, onError) {
   }
   return () => es.close()
 }
+
+// propagation runs a global DNS propagation check and feeds its events
+// (start, stage, row, done) to onEvent. It is read with fetch rather than
+// EventSource so that a refusal (bad name, rate limit) arrives with the
+// server's message. Returns a function that abandons the run.
+export function propagation(params, onEvent, onError) {
+  const ctl = new AbortController()
+  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString()
+  ;(async () => {
+    try {
+      const res = await fetch('/api/dns/propagation?' + qs, { credentials: 'same-origin', signal: ctl.signal, headers: { Accept: 'text/event-stream' } })
+      if (!res.ok) {
+        let data = {}
+        try { data = await res.json() } catch { /* not JSON */ }
+        if (res.status === 401) window.dispatchEvent(new CustomEvent('probe:unauthorized'))
+        throw Object.assign(new Error(data.error || res.statusText), { status: res.status })
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      let finished = false
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let cut
+        while ((cut = buf.indexOf('\n\n')) >= 0) {
+          const ev = parseSSE(buf.slice(0, cut))
+          buf = buf.slice(cut + 2)
+          if (!ev) continue
+          finished = finished || ev.type === 'done'
+          onEvent(ev.type, ev.data)
+        }
+      }
+      if (!finished) throw new Error('连接中断，检测没有完成')
+    } catch (e) {
+      if (e.name !== 'AbortError' && onError) onError(e)
+    }
+  })()
+  return () => ctl.abort()
+}
+// parseSSE reads one "event: …\ndata: …" block.
+export function parseSSE(block) {
+  let type = 'message'
+  const data = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) type = line.slice(6).trim()
+    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+  }
+  if (!data.length) return null
+  try { return { type, data: JSON.parse(data.join('\n')) } } catch { return null }
+}

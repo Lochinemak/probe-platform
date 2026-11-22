@@ -38,7 +38,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .nav-menu { position: relative; }
 .nav-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 120px; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 34px rgba(0,0,0,.35); }
 .nav-pop button { text-align: left; }
-.nav button { background: transparent; border: 0; padding: 8px 14px; border-radius: 8px; color: var(--muted); cursor: pointer; }
+.nav button { background: transparent; border: 0; padding: 8px 14px; border-radius: 8px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .nav button:hover { color: var(--text); background: var(--bg-3); }
 .nav button.active { color: var(--text); background: var(--bg-3); font-weight: 600; }
 .spacer { flex: 1; }
@@ -183,6 +183,14 @@ table.grid tr.group-first td { border-top: 1px solid var(--border); }
 .ip-kv > div:nth-child(odd) { color: var(--muted); }
 .kv { display: grid; }
 .egress { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.prop-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.prop-stage { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.prop-stage.running { border-color: var(--accent); }
+.prop-stage.failed { border-color: var(--bad); }
+.prop-stage.waiting, .prop-stage.skipped { opacity: .65; }
+.prop-stage .sub { margin-top: 4px; font-size: 12.5px; }
+.prop-ref { font-size: 14px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prop-groups { margin-bottom: 10px; gap: 8px; }
 .resolver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
 .resolver { margin-bottom: 0; }
 .resolver-addrs { margin-top: 8px; }
@@ -289,9 +297,12 @@ pre.cmd { background: var(--bg); border: 1px solid var(--border); border-radius:
 details summary { cursor: pointer; color: var(--muted); }
 @media (max-width: 800px) {
   .topbar { height: auto; flex-wrap: wrap; padding: 10px 0; gap: 10px 16px; }
+  .nav { flex-wrap: wrap; min-width: 0; }
+  .nav button { padding: 7px 10px; }
   .app { padding: 0 10px 30px; }
   .stats, .stats.five { grid-template-columns: 1fr 1fr; }
   .coverage-main, .egress { grid-template-columns: 1fr; }
+  .prop-stages { grid-template-columns: 1fr 1fr; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ip-row { grid-template-columns: 1fr auto; }
   .ip-where { grid-column: 1 / -1; }

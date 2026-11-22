@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { api } from './api.js'
 import { route, navigate, taskPath } from './route.js'
 import ProbeView from './views/Probe.vue'
@@ -10,8 +10,12 @@ import NotifyView from './views/Notify.vue'
 import SettingsView from './views/Settings.vue'
 import CoverageView from './views/Coverage.vue'
 import SharePage from './views/SharePage.vue'
-import IpLookupView from './views/IpLookup.vue'
-import DnsServersView from './views/DnsServers.vue'
+
+// The tool pages are loaded when first opened, so they do not weigh on the
+// probe page.
+const IpLookupView = defineAsyncComponent(() => import('./views/IpLookup.vue'))
+const DnsServersView = defineAsyncComponent(() => import('./views/DnsServers.vue'))
+const DnsGlobalView = defineAsyncComponent(() => import('./views/DnsGlobal.vue'))
 
 // Pages in nav order. The current one lives in the URL path (see route.js),
 // so a reload, bookmark or back button lands on the same page. `menu` pages
@@ -21,6 +25,7 @@ const TABS = {
   ip: { label: 'IP 定位' },
   coverage: { label: '节点覆盖' },
   'dns-servers': { label: 'DNS 目录' },
+  'dns-global': { label: '全球 DNS' },
   monitors: { label: '监控', admin: true },
   agents: { label: '节点' },
   history: { label: '历史' },
@@ -176,6 +181,7 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
         <IpLookupView v-if="tab === 'ip'" />
         <CoverageView v-if="tab === 'coverage'" />
         <DnsServersView v-if="tab === 'dns-servers'" />
+        <DnsGlobalView v-if="tab === 'dns-global'" :admin="isAdmin" />
         <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openTask" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />

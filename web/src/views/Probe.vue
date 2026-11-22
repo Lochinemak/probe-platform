@@ -483,7 +483,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
         </template>
         <template v-else-if="type === 'dns'">
           <div class="field"><label>记录类型</label>
-            <select v-model="params.dns.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SOA', 'SRV']" :key="t">{{ t }}</option></select>
+            <select v-model="params.dns.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'PTR', 'SOA', 'SRV', 'CAA', 'HTTPS', 'SVCB', 'DS', 'DNSKEY', 'TLSA']" :key="t">{{ t }}</option></select>
           </div>
           <div class="field grow"><label>DNS 服务器（留空用节点系统 DNS）</label><input type="text" v-model="params.dns.dns_server" placeholder="223.5.5.5 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
           <div class="field"><label>次数</label><input type="number" min="1" max="20" v-model.number="params.dns.count" /></div>

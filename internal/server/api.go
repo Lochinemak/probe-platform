@@ -36,11 +36,12 @@ type API struct {
 	sched    *Scheduler // nil in tests / when disabled
 	notifier *Notifier
 	settings *Settings
+	prop     *propChecker
 }
 
 // NewHandler wires every route.
 func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Settings, sched *Scheduler, notifier *Notifier, log *slog.Logger) http.Handler {
-	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(settings), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, settings: settings}
+	a := &API{cfg: cfg, hub: hub, store: store, auth: newSessionAuth(settings), static: static, files: hub.files, log: log, sched: sched, notifier: notifier, settings: settings, prop: newPropChecker(hub.geo)}
 	hub.SetLegacyToken(settings.LegacyAgentToken)
 	hub.AddTaskDoneHook(a.freezeShares)
 	mux := http.NewServeMux()
@@ -58,6 +59,7 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("DELETE /api/agents/{id}", a.protect(a.deleteAgent))
 	mux.Handle("GET /api/stats", a.protectGuest(a.stats))
 	mux.Handle("GET /api/dns/resolvers", a.protectGuest(a.listResolvers))
+	mux.Handle("GET /api/dns/propagation", a.protectGuest(a.dnsPropagation))
 	mux.Handle("GET /api/ip/me", a.protectGuest(a.ipMe))
 	mux.Handle("GET /api/ip/lookup", a.protectGuest(a.ipLookup))
 	mux.Handle("GET /api/agents/{id}/token", a.protect(a.agentToken))
