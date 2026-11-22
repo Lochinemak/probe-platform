@@ -84,6 +84,9 @@ func dnsType(s string) (dnsmessage.Type, string, error) {
 	}
 	t, ok := types[s]
 	if !ok {
+		t, ok = extraTypes[s]
+	}
+	if !ok {
 		return 0, "", fmt.Errorf("unsupported record type %q", s)
 	}
 	return t, s, nil
@@ -191,79 +194,14 @@ func dnsQuery(ctx context.Context, fqdn string, rtype dnsmessage.Type, server, p
 		a.Error = err.Error()
 		return a
 	}
-	for {
-		h, err := parser.AnswerHeader()
-		if errors.Is(err, dnsmessage.ErrSectionDone) {
-			break
-		}
-		if err != nil {
-			break
-		}
-		ans := protocol.DNSAnswer{Name: strings.TrimSuffix(h.Name.String(), "."), Type: strings.TrimPrefix(h.Type.String(), "Type"), TTL: h.TTL}
-		switch h.Type {
-		case dnsmessage.TypeA:
-			r, err := parser.AResource()
-			if err != nil {
-				return a
-			}
-			ip := net.IP(r.A[:])
-			ans.Value = ip.String()
-			if IsFakeIP(ip) {
-				a.FakeIP = true
-			}
-		case dnsmessage.TypeAAAA:
-			r, err := parser.AAAAResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = net.IP(r.AAAA[:]).String()
-		case dnsmessage.TypeCNAME:
-			r, err := parser.CNAMEResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = strings.TrimSuffix(r.CNAME.String(), ".")
-		case dnsmessage.TypeNS:
-			r, err := parser.NSResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = strings.TrimSuffix(r.NS.String(), ".")
-		case dnsmessage.TypePTR:
-			r, err := parser.PTRResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = strings.TrimSuffix(r.PTR.String(), ".")
-		case dnsmessage.TypeMX:
-			r, err := parser.MXResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = fmt.Sprintf("%d %s", r.Pref, strings.TrimSuffix(r.MX.String(), "."))
-		case dnsmessage.TypeTXT:
-			r, err := parser.TXTResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = strings.Join(r.TXT, " ")
-		case dnsmessage.TypeSOA:
-			r, err := parser.SOAResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = fmt.Sprintf("%s %s serial=%d", strings.TrimSuffix(r.NS.String(), "."), strings.TrimSuffix(r.MBox.String(), "."), r.Serial)
-		case dnsmessage.TypeSRV:
-			r, err := parser.SRVResource()
-			if err != nil {
-				return a
-			}
-			ans.Value = fmt.Sprintf("%d %d %d %s", r.Priority, r.Weight, r.Port, strings.TrimSuffix(r.Target.String(), "."))
-		default:
-			if err := parser.SkipAnswer(); err != nil {
-				return a
-			}
+	answers, _ := parser.AllAnswers()
+	for _, rr := range answers {
+		ans, ok := recordOf(rr)
+		if !ok {
 			continue
+		}
+		if ans.Type == "A" && IsFakeIP(net.ParseIP(ans.Value)) {
+			a.FakeIP = true
 		}
 		a.Answers = append(a.Answers, ans)
 	}

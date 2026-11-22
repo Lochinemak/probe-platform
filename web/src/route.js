@@ -14,7 +14,7 @@ import { reactive } from 'vue'
 export const PROBE_TYPES = ['ping', 'tcping', 'http', 'udp', 'dns', 'mtr', 'tls', 'dns_compare', 'status']
 // 节点状态 shows what the node's own machine is doing: administrators only.
 export const ADMIN_PROBE_TYPES = ['status']
-export const PAGES = ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']
+export const PAGES = ['ip', 'coverage', 'dns-servers', 'monitors', 'agents', 'history', 'notify', 'settings']
 
 export function parse(pathname, search = '') {
   const parts = String(pathname || '').split('/').filter(Boolean)

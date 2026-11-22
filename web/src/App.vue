@@ -10,13 +10,17 @@ import NotifyView from './views/Notify.vue'
 import SettingsView from './views/Settings.vue'
 import CoverageView from './views/Coverage.vue'
 import SharePage from './views/SharePage.vue'
+import IpLookupView from './views/IpLookup.vue'
+import DnsServersView from './views/DnsServers.vue'
 
 // Pages in nav order. The current one lives in the URL path (see route.js),
 // so a reload, bookmark or back button lands on the same page. `menu` pages
 // sit behind the 管理 menu instead of taking a slot in the bar.
 const TABS = {
   probe: { label: '拨测' },
+  ip: { label: 'IP 定位' },
   coverage: { label: '节点覆盖' },
+  'dns-servers': { label: 'DNS 目录' },
   monitors: { label: '监控', admin: true },
   agents: { label: '节点' },
   history: { label: '历史' },
@@ -169,7 +173,9 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
     <template v-if="session && !gated && !sharing">
       <div v-show="!showLogin">
         <ProbeView v-show="tab === 'probe'" :role="session.role" />
+        <IpLookupView v-if="tab === 'ip'" />
         <CoverageView v-if="tab === 'coverage'" />
+        <DnsServersView v-if="tab === 'dns-servers'" />
         <MonitorsView v-if="tab === 'monitors' && isAdmin" :initial-id="monitorId" @open-history="openTask" />
         <NotifyView v-if="tab === 'notify' && isAdmin" />
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />

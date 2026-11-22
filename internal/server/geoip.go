@@ -35,6 +35,7 @@ type GeoIP struct {
 	agentTTL time.Duration
 	agents   map[string]geoEntry
 	hops     map[string]string
+	infos    map[string]ipAPIEntry // online answers for the IP lookup page
 }
 
 type geoEntry struct {
@@ -53,6 +54,7 @@ func NewGeoIP(cfg Config, log *slog.Logger) *GeoIP {
 		agentTTL: 24 * time.Hour,
 		agents:   map[string]geoEntry{},
 		hops:     map[string]string{},
+		infos:    map[string]ipAPIEntry{},
 	}
 	candidates := []string{}
 	if cfg.IP2RegionDB != "" {

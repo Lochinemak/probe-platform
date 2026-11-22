@@ -16,7 +16,7 @@ describe('parse', () => {
     expect(parse('/s')).toMatchObject({ page: 'probe' })
   })
   it('maps the other pages', () => {
-    for (const p of ['coverage', 'monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
+    for (const p of ['ip', 'coverage', 'dns-servers', 'monitors', 'agents', 'history', 'notify', 'settings']) expect(parse('/' + p).page).toBe(p)
     expect(parse('/monitors', '?id=m1').query.id).toBe('m1')
   })
   it('falls back to the probe page', () => {

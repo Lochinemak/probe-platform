@@ -239,6 +239,8 @@ make geoip-db     # 下载 ip2region 离线库到 data/ip2region.xdb，重启 se
 | `/ping` `/tcping` `/http` `/udp` `/dns` `/mtr` `/tls` `/dns_compare` `/status` | 拨测页对应的检测类型；`?target=example.com` 预填目标 |
 | `/t/<任务 ID>` | 某一次检测的结果：进行中的实时更新，结束的从历史读取，表单同时回填成当时的参数。游客只能打开自己发起的 |
 | `/s/<分享码>` | 分享出去的检测结果：只读，不用登录就能打开（关闭了游客访问也一样），见下面「分享与截图」 |
+| `/ip` | IP 定位：查询任意公网 IP 的归属地、运营商、线路类型（开启在线查询时还有 ASN、网络类型、估算坐标）；对照「本站看到的出口」和「境外站点看到的出口」判断是否按目的地分流 |
+| `/dns-servers` | 公共 DNS 目录：全国 / 全球公共解析器与运营商省级解析器的 IPv4 / IPv6 / DoH / DoT 地址，可复制，或点「用它解析」直接带到 DNS 检测 |
 | `/coverage` | 节点覆盖：节点分布地图（有在线节点 / 全部离线 / 暂无节点）、点击地区看那里各线路的在线情况、地区排行、线路汇总 |
 | `/monitors` `/agents` `/history` `/notify` `/settings` | 监控、节点、历史、通知、设置（「历史」里的每一行都链接到 `/t/<任务 ID>`） |
 
@@ -317,6 +319,12 @@ curl -s -X POST localhost:8080/api/tasks/<id>/cancel
 curl localhost:8080/api/tasks?limit=20
 curl localhost:8080/api/tasks/<id>
 curl localhost:8080/api/agents
+# IP 定位：/api/ip/me 是服务器看到的来访地址（只查离线库）；lookup 查任意地址，离线库优先，
+# 开了 PROBE_GEOIP_ONLINE 时再用 ip-api.com 补 ASN、网络类型和坐标。游客每 IP 每分钟 20 次
+curl -s localhost:8080/api/ip/me
+curl -s "localhost:8080/api/ip/lookup?ip=223.5.5.5"
+# 公共 DNS 目录（随二进制内置的 internal/server/data/resolvers.json）
+curl -s localhost:8080/api/dns/resolvers
 # 首页统计：在线 / 总节点、大陆 / 其他 / 未识别、24 小时检测次数与节点执行成功率（游客可读，缓存 30 秒）
 curl localhost:8080/api/stats
 # 节点管理（管理员）：创建节点并拿到 token、查看 / 重置 token、删除（即吊销）
@@ -399,6 +407,7 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 
 - Dashboard 能让任意在线节点向任意目标发包，**公网部署必须配置管理员登录并使用 HTTPS**。
 - **游客只能探测公网目标。** agent 往往跑在别人家的内网和 dashboard 自己所在的云主机上，若不限制，未登录的访客就能借节点读取云元数据、扫内网端口、访问路由器和 NAS 后台。限制分两层：server 在建任务前校验目标（字面量地址直接判断，域名会解析后逐个判断，有一个内网地址就拒绝），agent 在真正连接的地址上再判一次（`public_only`，HTTP 连每一次重定向都查，因此改不动的 DNS 重绑定也无效）。判定标准见 `internal/probe/netpolicy.go`：回环、RFC 1918、链路本地（含 169.254.169.254）、CGNAT、组播、198.18/15、文档与保留网段全部算内网。管理员不受此限。
+- **IP 定位页的「检测境外出口」会让浏览器直接请求第三方。** 点击后浏览器向 `https://www.cloudflare.com/cdn-cgi/trace`（失败时 `https://api.ipify.org`）发一个请求，对方因此会看到访问者的出口地址；不点不会发起，页面上也写明了。CSP 的 `connect-src` 只额外放行了这两个域名。访问者自己的地址（`/api/ip/me`）只查离线库，不会被发给 ip-api.com；只有在查询框里手动输入的地址才可能走在线查询（明文 HTTP，全站每分钟最多 30 次）。
 - **反向代理后请确认 `PROBE_PROXY_HOPS`。** `X-Forwarded-For` 是客户端起头、每层代理追加的列表，所以只有自己的代理追加的那几个条目可信。server 默认按一层代理取倒数第一个；如果照抄 `deploy/nginx.conf.example`（`proxy_add_x_forwarded_for`）就不用改。取错方向会让登录爆破限制和游客频率限制被一个请求头绕过，审计日志里的 IP 也会是伪造的。
 - agent 只接受 server 下发的九种探测类型，参数有上限（次数 ≤ 100、跳数 ≤ 64、HTTP 响应最多读 8 MiB、UDP 负载 ≤ 1024 字节、DNS 对比 ≤ 8 个解析器）。
 - **server 只把 agent 声明支持的东西发给它。** UDP / TLS / DNS 对比 / 节点状态和 `connect_to` / `resolver` 两个参数需要较新的 agent；版本过旧的节点（通常是还没重新拉镜像的 Docker 节点）会直接得到「节点版本过旧」的失败结果，而不是忽略新参数、把一次测错了对象的结果当成正常结果交回来。拨测页里这类节点会置灰并写明原因。

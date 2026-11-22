@@ -311,8 +311,13 @@ watch(() => [route.page, route.type, route.taskId], ([page, t, id]) => {
   if (id) { if (id !== task.value?.id) openTask(id); return }
   if (!t) { navigate('/' + type.value, { replace: true }); return }
   if (t !== type.value) setType(t)
-  // /http?target=… prefills the box, e.g. from "发起同类探测".
-  if (route.query.target) { target.value = route.query.target; navigate('/' + t, { replace: true }) }
+  // /http?target=… prefills the box, e.g. from "发起同类探测"; /dns?dns_server=…
+  // comes from the DNS directory's "用它解析".
+  if (route.query.target || route.query.dns_server) {
+    if (route.query.target) target.value = route.query.target
+    if (route.query.dns_server && t === 'dns') { params.dns.dns_server = route.query.dns_server; showAdvanced.value = true }
+    navigate('/' + t, { replace: true })
+  }
 }, { immediate: true })
 watch(() => info.value.title, (title) => { if (route.page === 'probe') document.title = `${title} · 拨测平台` })
 watch(() => route.page, (page) => { if (page === 'probe') document.title = `${info.value.title} · 拨测平台` }, { immediate: true })

@@ -57,6 +57,9 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 	mux.Handle("PATCH /api/agents/{id}", a.protect(a.patchAgent))
 	mux.Handle("DELETE /api/agents/{id}", a.protect(a.deleteAgent))
 	mux.Handle("GET /api/stats", a.protectGuest(a.stats))
+	mux.Handle("GET /api/dns/resolvers", a.protectGuest(a.listResolvers))
+	mux.Handle("GET /api/ip/me", a.protectGuest(a.ipMe))
+	mux.Handle("GET /api/ip/lookup", a.protectGuest(a.ipLookup))
 	mux.Handle("GET /api/agents/{id}/token", a.protect(a.agentToken))
 	mux.Handle("POST /api/agents/{id}/token", a.protect(a.resetAgentToken))
 	mux.Handle("GET /api/tasks", a.protectGuest(a.listTasks))
@@ -107,7 +110,9 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 func (a *API) securityHeaders(next http.Handler) http.Handler {
 	// blob: is for the screenshot preview, an image the page itself rendered.
 	const csp = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
-		"connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+		// The two hosts are what the IP page asks, on a click, which address
+		// the browser reaches the outside world from.
+		"connect-src 'self' https://www.cloudflare.com https://api.ipify.org; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")

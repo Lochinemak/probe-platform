@@ -1,0 +1,393 @@
+[
+ {
+  "id": "alidns",
+  "name": "阿里 DNS",
+  "org": "阿里云",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "223.5.5.5",
+   "223.6.6.6"
+  ],
+  "ipv6": [
+   "2400:3200::1",
+   "2400:3200:baba::1"
+  ],
+  "doh": "https://dns.alidns.com/dns-query",
+  "dot": "dns.alidns.com",
+  "tier": "quick"
+ },
+ {
+  "id": "dnspod",
+  "name": "腾讯 DNSPod",
+  "org": "腾讯云",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "119.29.29.29"
+  ],
+  "ipv6": [
+   "2402:4e00::"
+  ],
+  "doh": "https://doh.pub/dns-query",
+  "dot": "dot.pub",
+  "tier": "quick"
+ },
+ {
+  "id": "baidu",
+  "name": "百度 DNS",
+  "org": "百度",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "180.76.76.76"
+  ],
+  "ipv6": [],
+  "tier": "quick"
+ },
+ {
+  "id": "114dns",
+  "name": "114 DNS",
+  "org": "南京信风",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "114.114.114.114",
+   "114.114.115.115"
+  ],
+  "ipv6": [],
+  "tier": "quick"
+ },
+ {
+  "id": "cnnic",
+  "name": "CNNIC SDNS",
+  "org": "中国互联网络信息中心",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "1.2.4.8",
+   "210.2.4.8"
+  ],
+  "ipv6": [],
+  "tier": "full"
+ },
+ {
+  "id": "volc",
+  "name": "火山引擎 DNS",
+  "org": "字节跳动",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "180.184.1.1",
+   "180.184.2.2"
+  ],
+  "ipv6": [],
+  "tier": "full"
+ },
+ {
+  "id": "360",
+  "name": "360 安全 DNS",
+  "org": "360",
+  "cc": "CN",
+  "scope": "national",
+  "ipv4": [
+   "101.226.4.6",
+   "218.30.118.6",
+   "123.125.81.6"
+  ],
+  "ipv6": [],
+  "doh": "https://doh.360.cn/dns-query",
+  "dot": "dot.360.cn",
+  "tier": "full",
+  "note": "前两个为电信线路，后两个为联通线路"
+ },
+ {
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "org": "Cloudflare",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "1.1.1.1",
+   "1.0.0.1"
+  ],
+  "ipv6": [
+   "2606:4700:4700::1111",
+   "2606:4700:4700::1001"
+  ],
+  "doh": "https://cloudflare-dns.com/dns-query",
+  "dot": "one.one.one.one",
+  "tier": "quick"
+ },
+ {
+  "id": "google",
+  "name": "Google Public DNS",
+  "org": "Google",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "8.8.8.8",
+   "8.8.4.4"
+  ],
+  "ipv6": [
+   "2001:4860:4860::8888",
+   "2001:4860:4860::8844"
+  ],
+  "doh": "https://dns.google/dns-query",
+  "dot": "dns.google",
+  "tier": "quick"
+ },
+ {
+  "id": "quad9",
+  "name": "Quad9",
+  "org": "Quad9 基金会",
+  "cc": "CH",
+  "scope": "global",
+  "ipv4": [
+   "9.9.9.9",
+   "149.112.112.112"
+  ],
+  "ipv6": [
+   "2620:fe::fe",
+   "2620:fe::9"
+  ],
+  "doh": "https://dns.quad9.net/dns-query",
+  "dot": "dns.quad9.net",
+  "tier": "quick",
+  "note": "默认拦截恶意域名"
+ },
+ {
+  "id": "opendns",
+  "name": "OpenDNS",
+  "org": "Cisco",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "208.67.222.222",
+   "208.67.220.220"
+  ],
+  "ipv6": [
+   "2620:119:35::35",
+   "2620:119:53::53"
+  ],
+  "doh": "https://doh.opendns.com/dns-query",
+  "tier": "quick"
+ },
+ {
+  "id": "adguard",
+  "name": "AdGuard DNS",
+  "org": "AdGuard",
+  "cc": "CY",
+  "scope": "global",
+  "ipv4": [
+   "94.140.14.14",
+   "94.140.15.15"
+  ],
+  "ipv6": [
+   "2a10:50c0::ad1:ff",
+   "2a10:50c0::ad2:ff"
+  ],
+  "doh": "https://dns.adguard-dns.com/dns-query",
+  "dot": "dns.adguard-dns.com",
+  "tier": "full",
+  "note": "默认拦截广告与跟踪域名，解析结果可能与其它解析器不同"
+ },
+ {
+  "id": "dnssb",
+  "name": "DNS.SB",
+  "org": "xTom",
+  "cc": "DE",
+  "scope": "global",
+  "ipv4": [
+   "185.222.222.222",
+   "45.11.45.11"
+  ],
+  "ipv6": [
+   "2a09::",
+   "2a11::"
+  ],
+  "doh": "https://doh.dns.sb/dns-query",
+  "dot": "dot.sb",
+  "tier": "full"
+ },
+ {
+  "id": "level3",
+  "name": "Level3",
+  "org": "Lumen",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "4.2.2.1",
+   "4.2.2.2"
+  ],
+  "ipv6": [],
+  "tier": "full"
+ },
+ {
+  "id": "verisign",
+  "name": "Verisign Public DNS",
+  "org": "Verisign",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "64.6.64.6",
+   "64.6.65.6"
+  ],
+  "ipv6": [
+   "2620:74:1b::1:1",
+   "2620:74:1c::2:2"
+  ],
+  "tier": "full"
+ },
+ {
+  "id": "yandex",
+  "name": "Yandex DNS",
+  "org": "Yandex",
+  "cc": "RU",
+  "scope": "global",
+  "ipv4": [
+   "77.88.8.8",
+   "77.88.8.1"
+  ],
+  "ipv6": [
+   "2a02:6b8::feed:0ff",
+   "2a02:6b8:0:1::feed:0ff"
+  ],
+  "tier": "full"
+ },
+ {
+  "id": "he",
+  "name": "Hurricane Electric",
+  "org": "Hurricane Electric",
+  "cc": "US",
+  "scope": "global",
+  "ipv4": [
+   "74.82.42.42"
+  ],
+  "ipv6": [
+   "2001:470:20::2"
+  ],
+  "tier": "full"
+ },
+ {
+  "id": "hinet",
+  "name": "HiNet",
+  "org": "中华电信",
+  "cc": "CN",
+  "scope": "global",
+  "ipv4": [
+   "168.95.1.1",
+   "168.95.192.1"
+  ],
+  "ipv6": [
+   "2001:b000:168::1",
+   "2001:b000:168::2"
+  ],
+  "province": "台湾",
+  "tier": "full"
+ },
+ {
+  "id": "bj-cu",
+  "name": "北京联通",
+  "org": "中国联通",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "202.106.0.20",
+   "202.106.196.115",
+   "202.106.46.151"
+  ],
+  "ipv6": [],
+  "province": "北京",
+  "line": "联通",
+  "tier": "dir"
+ },
+ {
+  "id": "gd-cu",
+  "name": "广东联通",
+  "org": "中国联通",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "210.21.196.6",
+   "221.5.88.88"
+  ],
+  "ipv6": [],
+  "province": "广东",
+  "line": "联通",
+  "tier": "dir"
+ },
+ {
+  "id": "gd-cm",
+  "name": "广东移动",
+  "org": "中国移动",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "211.136.192.6"
+  ],
+  "ipv6": [],
+  "province": "广东",
+  "line": "移动",
+  "tier": "dir"
+ },
+ {
+  "id": "zj-ct",
+  "name": "浙江电信",
+  "org": "中国电信",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "202.101.172.35"
+  ],
+  "ipv6": [],
+  "province": "浙江",
+  "line": "电信",
+  "tier": "dir"
+ },
+ {
+  "id": "ah-ct",
+  "name": "安徽电信",
+  "org": "中国电信",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "61.132.163.68",
+   "202.102.213.68"
+  ],
+  "ipv6": [],
+  "province": "安徽",
+  "line": "电信",
+  "tier": "dir"
+ },
+ {
+  "id": "gx-cu",
+  "name": "广西联通",
+  "org": "中国联通",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "221.7.128.68",
+   "221.7.136.68"
+  ],
+  "ipv6": [],
+  "province": "广西",
+  "line": "联通",
+  "tier": "dir"
+ },
+ {
+  "id": "sh-cu",
+  "name": "上海联通",
+  "org": "中国联通",
+  "cc": "CN",
+  "scope": "province",
+  "ipv4": [
+   "210.22.70.3",
+   "210.22.84.3"
+  ],
+  "ipv6": [],
+  "province": "上海",
+  "line": "联通",
+  "tier": "dir"
+ }
+]
