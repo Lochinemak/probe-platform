@@ -112,9 +112,12 @@ func NewHandler(cfg Config, hub *Hub, store *Store, static fs.FS, settings *Sett
 func (a *API) securityHeaders(next http.Handler) http.Handler {
 	// blob: is for the screenshot preview, an image the page itself rendered.
 	const csp = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
-		// The two hosts are what the IP page asks, on a click, which address
-		// the browser reaches the outside world from.
-		"connect-src 'self' https://www.cloudflare.com https://api.ipify.org; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+		// s.geneyuriy.com is the analytics script (Umami) and where it reports
+		// to; the script itself only counts on the official domains.
+		"script-src 'self' https://s.geneyuriy.com; " +
+		// The cloudflare/ipify hosts are what the IP page asks, on a click,
+		// which address the browser reaches the outside world from.
+		"connect-src 'self' https://s.geneyuriy.com https://www.cloudflare.com https://api.ipify.org; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")

@@ -82,7 +82,7 @@ func TestIPLookupAPI(t *testing.T) {
 	}
 	resp.Body.Close()
 	csp := resp.Header.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "connect-src 'self' https://www.cloudflare.com https://api.ipify.org;") || strings.Contains(csp, "connect-src *") {
+	if !strings.Contains(csp, "connect-src 'self' https://s.geneyuriy.com https://www.cloudflare.com https://api.ipify.org;") || strings.Contains(csp, "connect-src *") {
 		t.Errorf("connect-src: %s", csp)
 	}
 }
