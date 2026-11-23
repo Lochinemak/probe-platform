@@ -343,6 +343,22 @@ func (r *propRun) ask(ctx context.Context, addr, name, typ string, recurse bool,
 	return r.c.exchange(ctx, probe.DNSQuestion{Name: name, Type: typ, Recurse: recurse, Server: net.JoinHostPort(addr, "53"), Timeout: timeout, PublicOnly: r.c.publicOnly})
 }
 
+// askTwice is ask with one more try when the first gets no reply: one lost
+// datagram should not read as a server that is down or cannot be judged.
+func (r *propRun) askTwice(ctx context.Context, addr, name, typ string, recurse bool, timeout time.Duration) (*probe.DNSMessage, error) {
+	m, err := r.ask(ctx, addr, name, typ, recurse, timeout)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, errPropBudget) && r.c.publicOnlyOK(addr) {
+		m, err = r.ask(ctx, addr, name, typ, recurse, timeout)
+	}
+	return m, err
+}
+
+// publicOnlyOK reports whether addr may be asked at all; a refused address
+// is not worth a second try.
+func (c *propChecker) publicOnlyOK(addr string) bool {
+	return !c.publicOnly || probe.IsPublicIP(net.ParseIP(addr))
+}
+
 func normName(s string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
 }
@@ -889,7 +905,7 @@ func (r *propRun) authority(ctx context.Context, zone string, servers []nsAddr) 
 			if s.Addr == "" {
 				rows[i] = r.row("authority", id, s.Host, "", nil, errors.New("查不到这台服务器的 IPv4 地址"))
 			} else {
-				m, err := r.ask(ctx, s.Addr, r.req.Name, r.req.Type, false, propHopTimeout)
+				m, err := r.askTwice(ctx, s.Addr, r.req.Name, r.req.Type, false, propHopTimeout)
 				rows[i] = r.row("authority", id, s.Host, s.Addr, m, err)
 				if err == nil {
 					if soa, err := r.ask(ctx, s.Addr, zoneLabel(zone), "SOA", false, propHopTimeout); err == nil {
@@ -988,11 +1004,7 @@ func (r *propRun) recursive(ctx context.Context, ref []string, source string) []
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				m, err := r.ask(ctx, t.addr, r.req.Name, r.req.Type, true, propAskTimeout)
-				if err != nil && ctx.Err() == nil && !errors.Is(err, errPropBudget) {
-					// One lost datagram should not read as "cannot tell".
-					m, err = r.ask(ctx, t.addr, r.req.Name, r.req.Type, true, propAskTimeout)
-				}
+				m, err := r.askTwice(ctx, t.addr, r.req.Name, r.req.Type, true, propAskTimeout)
 				finish(i, m, err)
 			}()
 		}
