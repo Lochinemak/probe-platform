@@ -165,11 +165,20 @@ func (l *Logto) oauthFor(redirect string) *oauth2.Config {
 
 // LoginURL builds the authorization URL for a fresh state/verifier pair, with
 // redirect (from RedirectURLFor) as the callback.
+//
+// prompt=login makes the provider show its sign-in page every time instead of
+// silently reusing its own SSO session. Signing out here only drops our
+// cookie; without the prompt the next login would come straight back as the
+// same Logto account, with no way to switch to another one (e.g. after
+// signing in with an account that is not on the admin list).
 func (l *Logto) LoginURL(ctx context.Context, state, verifier, redirect string) (string, error) {
 	if err := l.init(ctx); err != nil {
 		return "", err
 	}
-	return l.oauthFor(redirect).AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), nil
+	return l.oauthFor(redirect).AuthCodeURL(state,
+		oauth2.S256ChallengeOption(verifier),
+		oauth2.SetAuthURLParam("prompt", "login"),
+	), nil
 }
 
 // Exchange turns the callback code into a verified identity. redirect must be

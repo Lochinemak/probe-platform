@@ -158,6 +158,11 @@ func TestLogtoLoginReturnsToTheDomainItStartedOn(t *testing.T) {
 		if got := loc.Query().Get("redirect_uri"); got != c.callback {
 			t.Fatalf("%s: redirect_uri = %q, want %q", c.host, got, c.callback)
 		}
+		// Without prompt=login the provider reuses its SSO session and a
+		// signed-out admin can never switch to another Logto account.
+		if got := loc.Query().Get("prompt"); got != "login" {
+			t.Fatalf("%s: prompt = %q, want \"login\"", c.host, got)
+		}
 
 		// The provider sends the browser back to that callback, on the same host.
 		resp = do(c.host, "/api/auth/logto/callback?code=abc&state="+loc.Query().Get("state"), resp.Cookies())
