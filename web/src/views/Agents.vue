@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
-import { LINES, PROVINCES, COUNTRIES, placeLabel } from '../geo.js'
+import { LINES, PROVINCES, COUNTRIES, COMMON_COUNTRIES, OTHER_COUNTRIES, placeLabel } from '../geo.js'
 import Onboarding from '../components/Onboarding.vue'
 
 const props = defineProps({
@@ -58,7 +58,8 @@ function editGeo(a) {
 }
 const countryChoices = computed(() => {
   const e = geoEdit.value
-  return e && e.cc && !COUNTRIES.some(([cc]) => cc === e.cc) ? [...COUNTRIES, [e.cc, e.cc]] : COUNTRIES
+  // A code the list does not have (set through the API) stays selectable.
+  return e && e.cc && !COUNTRIES.some(([cc]) => cc === e.cc) ? [[e.cc, e.cc]] : []
 })
 function onCountryChange() { geoEdit.value.province = ''; geoEdit.value.city = '' }
 async function saveGeo(clear = false) {
@@ -110,6 +111,8 @@ onBeforeUnmount(() => clearInterval(timer))
           <select v-model="geoEdit.cc" @change="onCountryChange">
             <option value="">自动识别</option>
             <option v-for="[cc, name] in countryChoices" :key="cc" :value="cc">{{ name }}</option>
+            <optgroup label="常用"><option v-for="[cc, name] in COMMON_COUNTRIES" :key="cc" :value="cc">{{ name }}</option></optgroup>
+            <optgroup label="其他（按拼音）"><option v-for="[cc, name] in OTHER_COUNTRIES" :key="cc" :value="cc">{{ name }}</option></optgroup>
           </select>
         </div>
         <div class="field" v-if="geoEdit.cc === 'CN'"><label>省份</label>

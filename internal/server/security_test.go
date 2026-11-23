@@ -66,6 +66,43 @@ func TestClientIPIgnoresClientSuppliedHops(t *testing.T) {
 	}
 }
 
+// TestAgentIPBehindCDN: a node that connects through a CDN domain shows up
+// at our proxy as the CDN's edge; its own address is the one the CDN appended
+// before it. Rate limiting keeps using clientIP, which never reads that far.
+func TestAgentIPBehindCDN(t *testing.T) {
+	req := func(xff string) *http.Request {
+		r := httptest.NewRequest("GET", "/ws/agent", nil)
+		r.RemoteAddr = "172.17.0.1:1234"
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	cases := []struct {
+		name, xff string
+		trust     bool
+		hops      int
+		want      string
+	}{
+		{"direct", "198.51.100.7", true, 1, "198.51.100.7"},
+		{"through a CDN", "1.2.3.4, 101.33.0.9", true, 1, "1.2.3.4"},
+		{"forward proxy's private entry skipped", "10.0.0.5, 1.2.3.4, 101.33.0.9", true, 1, "1.2.3.4"},
+		{"only private entries left of ours", "10.0.0.5, 101.33.0.9", true, 1, "101.33.0.9"},
+		{"IPv6 node", "2001:4860::1, 101.33.0.9", true, 1, "2001:4860::1"},
+		{"two own proxies", "1.2.3.4, 101.33.0.9, 10.0.0.2", true, 2, "1.2.3.4"},
+		{"proxy not trusted", "1.2.3.4, 101.33.0.9", false, 1, "172.17.0.1"},
+		{"no header", "", true, 1, "172.17.0.1"},
+	}
+	for _, c := range cases {
+		if got := agentIP(req(c.xff), c.trust, c.hops); got != c.want {
+			t.Errorf("%s: agentIP = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := clientIP(req("1.2.3.4, 101.33.0.9"), true, 1); got != "101.33.0.9" {
+		t.Errorf("clientIP must stay on the proxy's own entry: %q", got)
+	}
+}
+
 // TestRateLimiterSweep: the table must not keep an entry per address forever.
 func TestRateLimiterSweep(t *testing.T) {
 	a := &sessionAuth{attempts: map[string][]time.Time{}}

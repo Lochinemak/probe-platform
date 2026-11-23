@@ -172,34 +172,257 @@ type countryInfo struct {
 	en     []string // lower case
 }
 
-// countries covers where nodes realistically are; anything else keeps the name
-// its source gave it.
+// countries is every country and territory with an ISO 3166 code except
+// China's three regions (filed as provinces, see regionCodes) and places with
+// nobody to host a node. Chinese names are ICU's (zh-CN), English names are
+// matched as whole words in node labels. web/src/geo.js COUNTRIES mirrors the
+// codes and names (TestCountriesMirrored). Generated, then trimmed by hand:
+// English names that are as often something else ("Georgia", "Jersey") are
+// left out.
 var countries = []countryInfo{
 	{"CN", "中国", []string{"china"}},
-	{"US", "美国", []string{"united states", "usa", "america"}}, {"JP", "日本", []string{"japan"}},
-	{"KR", "韩国", []string{"south korea", "korea"}}, {"SG", "新加坡", []string{"singapore"}},
-	{"DE", "德国", []string{"germany"}}, {"GB", "英国", []string{"united kingdom", "britain", "england"}},
-	{"FR", "法国", []string{"france"}}, {"NL", "荷兰", []string{"netherlands", "holland"}},
-	{"RU", "俄罗斯", []string{"russia"}}, {"CA", "加拿大", []string{"canada"}},
-	{"AU", "澳大利亚", []string{"australia"}}, {"NZ", "新西兰", []string{"new zealand"}},
-	{"IN", "印度", []string{"india"}}, {"ID", "印度尼西亚", []string{"indonesia"}},
-	{"MY", "马来西亚", []string{"malaysia"}}, {"TH", "泰国", []string{"thailand"}},
-	{"VN", "越南", []string{"vietnam", "viet nam"}}, {"PH", "菲律宾", []string{"philippines"}},
-	{"KH", "柬埔寨", []string{"cambodia"}}, {"MM", "缅甸", []string{"myanmar"}}, {"LA", "老挝", []string{"laos"}},
-	{"MN", "蒙古", []string{"mongolia"}}, {"KZ", "哈萨克斯坦", []string{"kazakhstan"}},
-	{"PK", "巴基斯坦", []string{"pakistan"}}, {"BD", "孟加拉国", []string{"bangladesh"}},
-	{"AE", "阿联酋", []string{"united arab emirates", "uae"}}, {"SA", "沙特阿拉伯", []string{"saudi arabia"}},
-	{"TR", "土耳其", []string{"turkey", "türkiye"}}, {"IL", "以色列", []string{"israel"}},
-	{"IT", "意大利", []string{"italy"}}, {"ES", "西班牙", []string{"spain"}}, {"PT", "葡萄牙", []string{"portugal"}},
-	{"SE", "瑞典", []string{"sweden"}}, {"NO", "挪威", []string{"norway"}}, {"FI", "芬兰", []string{"finland"}},
-	{"DK", "丹麦", []string{"denmark"}}, {"CH", "瑞士", []string{"switzerland"}}, {"AT", "奥地利", []string{"austria"}},
-	{"BE", "比利时", []string{"belgium"}}, {"IE", "爱尔兰", []string{"ireland"}}, {"PL", "波兰", []string{"poland"}},
-	{"CZ", "捷克", []string{"czechia", "czech republic"}}, {"HU", "匈牙利", []string{"hungary"}},
-	{"RO", "罗马尼亚", []string{"romania"}}, {"BG", "保加利亚", []string{"bulgaria"}}, {"GR", "希腊", []string{"greece"}},
-	{"UA", "乌克兰", []string{"ukraine"}}, {"LU", "卢森堡", []string{"luxembourg"}}, {"IS", "冰岛", []string{"iceland"}},
-	{"BR", "巴西", []string{"brazil"}}, {"MX", "墨西哥", []string{"mexico"}}, {"AR", "阿根廷", []string{"argentina"}},
-	{"CL", "智利", []string{"chile"}}, {"CO", "哥伦比亚", []string{"colombia"}},
-	{"ZA", "南非", []string{"south africa"}}, {"EG", "埃及", []string{"egypt"}}, {"NG", "尼日利亚", []string{"nigeria"}},
+	{"AD", "安道尔", []string{"andorra"}},
+	{"AE", "阿联酋", []string{"united arab emirates", "uae"}},
+	{"AF", "阿富汗", []string{"afghanistan"}},
+	{"AG", "安提瓜和巴布达", []string{"antigua and barbuda"}},
+	{"AI", "安圭拉", []string{"anguilla"}},
+	{"AL", "阿尔巴尼亚", []string{"albania"}},
+	{"AM", "亚美尼亚", []string{"armenia"}},
+	{"AO", "安哥拉", []string{"angola"}},
+	{"AR", "阿根廷", []string{"argentina"}},
+	{"AS", "美属萨摩亚", []string{"american samoa"}},
+	{"AT", "奥地利", []string{"austria"}},
+	{"AU", "澳大利亚", []string{"australia"}},
+	{"AW", "阿鲁巴", []string{"aruba"}},
+	{"AX", "奥兰群岛", []string{}},
+	{"AZ", "阿塞拜疆", []string{"azerbaijan"}},
+	{"BA", "波斯尼亚和黑塞哥维那", []string{"bosnia and herzegovina", "bosnia"}},
+	{"BB", "巴巴多斯", []string{"barbados"}},
+	{"BD", "孟加拉国", []string{"bangladesh"}},
+	{"BE", "比利时", []string{"belgium"}},
+	{"BF", "布基纳法索", []string{"burkina faso"}},
+	{"BG", "保加利亚", []string{"bulgaria"}},
+	{"BH", "巴林", []string{"bahrain"}},
+	{"BI", "布隆迪", []string{"burundi"}},
+	{"BJ", "贝宁", []string{"benin"}},
+	{"BL", "圣巴泰勒米", []string{}},
+	{"BM", "百慕大", []string{"bermuda"}},
+	{"BN", "文莱", []string{"brunei"}},
+	{"BO", "玻利维亚", []string{"bolivia"}},
+	{"BQ", "荷属加勒比区", []string{"caribbean netherlands"}},
+	{"BR", "巴西", []string{"brazil"}},
+	{"BS", "巴哈马", []string{"bahamas"}},
+	{"BT", "不丹", []string{"bhutan"}},
+	{"BW", "博茨瓦纳", []string{"botswana"}},
+	{"BY", "白俄罗斯", []string{"belarus"}},
+	{"BZ", "伯利兹", []string{"belize"}},
+	{"CA", "加拿大", []string{"canada"}},
+	{"CC", "科科斯群岛", []string{}},
+	{"CD", "刚果（金）", []string{"democratic republic of the congo", "dr congo"}},
+	{"CF", "中非共和国", []string{"central african republic"}},
+	{"CG", "刚果（布）", []string{"republic of the congo"}},
+	{"CH", "瑞士", []string{"switzerland"}},
+	{"CI", "科特迪瓦", []string{"ivory coast"}},
+	{"CK", "库克群岛", []string{"cook islands"}},
+	{"CL", "智利", []string{"chile"}},
+	{"CM", "喀麦隆", []string{"cameroon"}},
+	{"CO", "哥伦比亚", []string{"colombia"}},
+	{"CR", "哥斯达黎加", []string{"costa rica"}},
+	{"CU", "古巴", []string{"cuba"}},
+	{"CV", "佛得角", []string{"cape verde", "cabo verde"}},
+	{"CW", "库拉索", []string{"curacao"}},
+	{"CX", "圣诞岛", []string{"christmas island"}},
+	{"CY", "塞浦路斯", []string{"cyprus"}},
+	{"CZ", "捷克", []string{"czechia", "czech republic"}},
+	{"DE", "德国", []string{"germany"}},
+	{"DJ", "吉布提", []string{"djibouti"}},
+	{"DK", "丹麦", []string{"denmark"}},
+	{"DM", "多米尼克", []string{"dominica"}},
+	{"DO", "多米尼加共和国", []string{"dominican republic"}},
+	{"DZ", "阿尔及利亚", []string{"algeria"}},
+	{"EC", "厄瓜多尔", []string{"ecuador"}},
+	{"EE", "爱沙尼亚", []string{"estonia"}},
+	{"EG", "埃及", []string{"egypt"}},
+	{"EH", "西撒哈拉", []string{"western sahara"}},
+	{"ER", "厄立特里亚", []string{"eritrea"}},
+	{"ES", "西班牙", []string{"spain"}},
+	{"ET", "埃塞俄比亚", []string{"ethiopia"}},
+	{"FI", "芬兰", []string{"finland"}},
+	{"FJ", "斐济", []string{"fiji"}},
+	{"FK", "福克兰群岛", []string{"falkland islands"}},
+	{"FM", "密克罗尼西亚", []string{"micronesia"}},
+	{"FO", "法罗群岛", []string{"faroe islands"}},
+	{"FR", "法国", []string{"france"}},
+	{"GA", "加蓬", []string{"gabon"}},
+	{"GB", "英国", []string{"united kingdom", "britain", "england", "uk"}},
+	{"GD", "格林纳达", []string{"grenada"}},
+	{"GE", "格鲁吉亚", []string{}},
+	{"GF", "法属圭亚那", []string{"french guiana"}},
+	{"GG", "根西岛", []string{"guernsey"}},
+	{"GH", "加纳", []string{"ghana"}},
+	{"GI", "直布罗陀", []string{"gibraltar"}},
+	{"GL", "格陵兰", []string{"greenland"}},
+	{"GM", "冈比亚", []string{"gambia"}},
+	{"GN", "几内亚", []string{"guinea"}},
+	{"GP", "瓜德罗普", []string{"guadeloupe"}},
+	{"GQ", "赤道几内亚", []string{"equatorial guinea"}},
+	{"GR", "希腊", []string{"greece"}},
+	{"GS", "南乔治亚和南桑威奇群岛", []string{}},
+	{"GT", "危地马拉", []string{"guatemala"}},
+	{"GU", "关岛", []string{"guam"}},
+	{"GW", "几内亚比绍", []string{}},
+	{"GY", "圭亚那", []string{"guyana"}},
+	{"HN", "洪都拉斯", []string{"honduras"}},
+	{"HR", "克罗地亚", []string{"croatia"}},
+	{"HT", "海地", []string{"haiti"}},
+	{"HU", "匈牙利", []string{"hungary"}},
+	{"ID", "印度尼西亚", []string{"indonesia"}},
+	{"IE", "爱尔兰", []string{"ireland"}},
+	{"IL", "以色列", []string{"israel"}},
+	{"IM", "马恩岛", []string{"isle of man"}},
+	{"IN", "印度", []string{"india"}},
+	{"IO", "英属印度洋领地", []string{"british indian ocean territory"}},
+	{"IQ", "伊拉克", []string{"iraq"}},
+	{"IR", "伊朗", []string{"iran"}},
+	{"IS", "冰岛", []string{"iceland"}},
+	{"IT", "意大利", []string{"italy"}},
+	{"JE", "泽西岛", []string{}},
+	{"JM", "牙买加", []string{"jamaica"}},
+	{"JO", "约旦", []string{}},
+	{"JP", "日本", []string{"japan"}},
+	{"KE", "肯尼亚", []string{"kenya"}},
+	{"KG", "吉尔吉斯斯坦", []string{"kyrgyzstan"}},
+	{"KH", "柬埔寨", []string{"cambodia"}},
+	{"KI", "基里巴斯", []string{"kiribati"}},
+	{"KM", "科摩罗", []string{"comoros"}},
+	{"KN", "圣基茨和尼维斯", []string{"saint kitts and nevis"}},
+	{"KP", "朝鲜", []string{"north korea"}},
+	{"KR", "韩国", []string{"south korea", "korea"}},
+	{"KW", "科威特", []string{"kuwait"}},
+	{"KY", "开曼群岛", []string{"cayman islands"}},
+	{"KZ", "哈萨克斯坦", []string{"kazakhstan"}},
+	{"LA", "老挝", []string{"laos"}},
+	{"LB", "黎巴嫩", []string{"lebanon"}},
+	{"LC", "圣卢西亚", []string{"saint lucia"}},
+	{"LI", "列支敦士登", []string{"liechtenstein"}},
+	{"LK", "斯里兰卡", []string{"sri lanka"}},
+	{"LR", "利比里亚", []string{"liberia"}},
+	{"LS", "莱索托", []string{"lesotho"}},
+	{"LT", "立陶宛", []string{"lithuania"}},
+	{"LU", "卢森堡", []string{"luxembourg"}},
+	{"LV", "拉脱维亚", []string{"latvia"}},
+	{"LY", "利比亚", []string{"libya"}},
+	{"MA", "摩洛哥", []string{"morocco"}},
+	{"MC", "摩纳哥", []string{"monaco"}},
+	{"MD", "摩尔多瓦", []string{"moldova"}},
+	{"ME", "黑山", []string{"montenegro"}},
+	{"MF", "法属圣马丁", []string{}},
+	{"MG", "马达加斯加", []string{"madagascar"}},
+	{"MH", "马绍尔群岛", []string{"marshall islands"}},
+	{"MK", "北马其顿", []string{"north macedonia", "macedonia"}},
+	{"ML", "马里", []string{"mali"}},
+	{"MM", "缅甸", []string{"burma", "myanmar"}},
+	{"MN", "蒙古", []string{"mongolia"}},
+	{"MP", "北马里亚纳群岛", []string{"northern mariana islands"}},
+	{"MQ", "马提尼克", []string{"martinique"}},
+	{"MR", "毛里塔尼亚", []string{"mauritania"}},
+	{"MS", "蒙特塞拉特", []string{"montserrat"}},
+	{"MT", "马耳他", []string{"malta"}},
+	{"MU", "毛里求斯", []string{"mauritius"}},
+	{"MV", "马尔代夫", []string{"maldives"}},
+	{"MW", "马拉维", []string{"malawi"}},
+	{"MX", "墨西哥", []string{"mexico"}},
+	{"MY", "马来西亚", []string{"malaysia"}},
+	{"MZ", "莫桑比克", []string{"mozambique"}},
+	{"NA", "纳米比亚", []string{"namibia"}},
+	{"NC", "新喀里多尼亚", []string{"new caledonia"}},
+	{"NE", "尼日尔", []string{"niger"}},
+	{"NF", "诺福克岛", []string{"norfolk island"}},
+	{"NG", "尼日利亚", []string{"nigeria"}},
+	{"NI", "尼加拉瓜", []string{"nicaragua"}},
+	{"NL", "荷兰", []string{"netherlands", "holland"}},
+	{"NO", "挪威", []string{"norway"}},
+	{"NP", "尼泊尔", []string{"nepal"}},
+	{"NR", "瑙鲁", []string{"nauru"}},
+	{"NU", "纽埃", []string{"niue"}},
+	{"NZ", "新西兰", []string{"new zealand"}},
+	{"OM", "阿曼", []string{"oman"}},
+	{"PA", "巴拿马", []string{"panama"}},
+	{"PE", "秘鲁", []string{"peru"}},
+	{"PF", "法属波利尼西亚", []string{"french polynesia"}},
+	{"PG", "巴布亚新几内亚", []string{"papua new guinea"}},
+	{"PH", "菲律宾", []string{"philippines"}},
+	{"PK", "巴基斯坦", []string{"pakistan"}},
+	{"PL", "波兰", []string{"poland"}},
+	{"PM", "圣皮埃尔和密克隆群岛", []string{}},
+	{"PN", "皮特凯恩群岛", []string{"pitcairn islands"}},
+	{"PR", "波多黎各", []string{"puerto rico"}},
+	{"PS", "巴勒斯坦", []string{"palestinian territories", "palestine"}},
+	{"PT", "葡萄牙", []string{"portugal"}},
+	{"PW", "帕劳", []string{"palau"}},
+	{"PY", "巴拉圭", []string{"paraguay"}},
+	{"QA", "卡塔尔", []string{"qatar"}},
+	{"RE", "留尼汪", []string{"reunion"}},
+	{"RO", "罗马尼亚", []string{"romania"}},
+	{"RS", "塞尔维亚", []string{"serbia"}},
+	{"RU", "俄罗斯", []string{"russia", "russian federation"}},
+	{"RW", "卢旺达", []string{"rwanda"}},
+	{"SA", "沙特阿拉伯", []string{"saudi arabia"}},
+	{"SB", "所罗门群岛", []string{"solomon islands"}},
+	{"SC", "塞舌尔", []string{"seychelles"}},
+	{"SD", "苏丹", []string{"sudan"}},
+	{"SE", "瑞典", []string{"sweden"}},
+	{"SG", "新加坡", []string{"singapore"}},
+	{"SH", "圣赫勒拿", []string{}},
+	{"SI", "斯洛文尼亚", []string{"slovenia"}},
+	{"SJ", "斯瓦尔巴和扬马延", []string{}},
+	{"SK", "斯洛伐克", []string{"slovakia"}},
+	{"SL", "塞拉利昂", []string{"sierra leone"}},
+	{"SM", "圣马力诺", []string{"san marino"}},
+	{"SN", "塞内加尔", []string{"senegal"}},
+	{"SO", "索马里", []string{"somalia"}},
+	{"SR", "苏里南", []string{"suriname"}},
+	{"SS", "南苏丹", []string{"south sudan"}},
+	{"ST", "圣多美和普林西比", []string{"sao tome and principe"}},
+	{"SV", "萨尔瓦多", []string{"el salvador"}},
+	{"SX", "荷属圣马丁", []string{"sint maarten"}},
+	{"SY", "叙利亚", []string{"syria"}},
+	{"SZ", "斯威士兰", []string{"eswatini", "swaziland"}},
+	{"TC", "特克斯和凯科斯群岛", []string{}},
+	{"TD", "乍得", []string{}},
+	{"TF", "法属南部领地", []string{"french southern territories"}},
+	{"TG", "多哥", []string{"togo"}},
+	{"TH", "泰国", []string{"thailand"}},
+	{"TJ", "塔吉克斯坦", []string{"tajikistan"}},
+	{"TK", "托克劳", []string{"tokelau"}},
+	{"TL", "东帝汶", []string{"east timor"}},
+	{"TM", "土库曼斯坦", []string{"turkmenistan"}},
+	{"TN", "突尼斯", []string{"tunisia"}},
+	{"TO", "汤加", []string{"tonga"}},
+	{"TR", "土耳其", []string{"turkey"}},
+	{"TT", "特立尼达和多巴哥", []string{"trinidad and tobago"}},
+	{"TV", "图瓦卢", []string{"tuvalu"}},
+	{"TZ", "坦桑尼亚", []string{"tanzania"}},
+	{"UA", "乌克兰", []string{"ukraine"}},
+	{"UG", "乌干达", []string{"uganda"}},
+	{"US", "美国", []string{"united states", "usa", "america"}},
+	{"UY", "乌拉圭", []string{"uruguay"}},
+	{"UZ", "乌兹别克斯坦", []string{"uzbekistan"}},
+	{"VA", "梵蒂冈", []string{"vatican city", "vatican"}},
+	{"VC", "圣文森特和格林纳丁斯", []string{"saint vincent and the grenadines"}},
+	{"VE", "委内瑞拉", []string{"venezuela"}},
+	{"VG", "英属维尔京群岛", []string{"british virgin islands"}},
+	{"VI", "美属维尔京群岛", []string{}},
+	{"VN", "越南", []string{"vietnam", "viet nam"}},
+	{"VU", "瓦努阿图", []string{"vanuatu"}},
+	{"WF", "瓦利斯和富图纳", []string{}},
+	{"WS", "萨摩亚", []string{"samoa"}},
+	{"XK", "科索沃", []string{"kosovo"}},
+	{"YE", "也门", []string{"yemen"}},
+	{"YT", "马约特", []string{"mayotte"}},
+	{"ZA", "南非", []string{"south africa"}},
+	{"ZM", "赞比亚", []string{"zambia"}},
+	{"ZW", "津巴布韦", []string{"zimbabwe"}},
 }
 
 func countryByCode(cc string) (countryInfo, bool) {
@@ -386,22 +609,34 @@ func parseLabel(s string) (protocol.Geo, bool) {
 			return chinaGeo(p, ""), true
 		}
 	}
-	for _, c := range countries {
-		hit := strings.Contains(s, c.zh)
-		at := c.zh
-		for _, e := range c.en {
-			if !hit && containsWord(lower, e) {
-				hit, at = true, e
+	// The name that comes first in the label wins, the longest one when
+	// several start there: "印度尼西亚" is not India, "美国 马里兰" is not
+	// Mali, "South Sudan" is not Sudan. Only then a code standing alone, the
+	// first one in the label.
+	var c countryInfo
+	at, pos := "", -1
+	better := func(i int, name string) bool {
+		return i >= 0 && (pos < 0 || i < pos || i == pos && len(name) > len(at))
+	}
+	for _, ci := range countries {
+		if i := strings.Index(s, ci.zh); better(i, ci.zh) {
+			c, at, pos = ci, ci.zh, i
+		}
+		for _, e := range ci.en {
+			if i := wordIndex(lower, e); better(i, e) {
+				c, at, pos = ci, e, i
 			}
 		}
-		for _, f := range fields {
-			if !hit && f == c.cc {
-				hit, at = true, f
-			}
+	}
+	for _, f := range fields {
+		if at != "" {
+			break
 		}
-		if !hit {
-			continue
+		if ci, ok := countryByCode(f); ok {
+			c, at = ci, f
 		}
+	}
+	if at != "" {
 		g := protocol.Geo{CC: c.cc, Country: c.zh}
 		if c.cc == "CN" {
 			return g, true
@@ -426,11 +661,14 @@ func parseLabel(s string) (protocol.Geo, bool) {
 
 // containsWord reports whether lower contains word with no letter on either
 // side, so "us" does not match inside "russia".
-func containsWord(lower, word string) bool {
+func containsWord(lower, word string) bool { return wordIndex(lower, word) >= 0 }
+
+// wordIndex is where word first stands on its own in lower, or -1.
+func wordIndex(lower, word string) int {
 	for from := 0; ; {
 		i := strings.Index(lower[from:], word)
 		if i < 0 {
-			return false
+			return -1
 		}
 		i += from
 		before, after := rune(' '), rune(' ')
@@ -441,7 +679,7 @@ func containsWord(lower, word string) bool {
 			after = rune(lower[j])
 		}
 		if !isASCIILetter(before) && !isASCIILetter(after) {
-			return true
+			return i
 		}
 		from = i + len(word)
 	}

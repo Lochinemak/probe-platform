@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"probe-platform/internal/buildinfo"
+	"probe-platform/internal/probe"
 	"probe-platform/internal/protocol"
 )
 
@@ -171,6 +172,32 @@ func clientIP(r *http.Request, trustProxy bool, hops int) string {
 	return direct
 }
 
+// agentIP is the public address of an authenticated node, for display and the
+// geography lookup. It differs from clientIP when the node reaches us through
+// a CDN or another relay: our own proxy then sees the CDN's edge, and the
+// node's address is further left in X-Forwarded-For, where the CDN appended
+// it. So this takes the leftmost public entry up to the one our proxies vouch
+// for. A node could put a false address there itself, but it has already
+// proven who it is with its token and can as easily mislabel its location;
+// nothing that limits or audits callers may use this (clientIP is for that).
+func agentIP(r *http.Request, trustProxy bool, hops int) string {
+	ip := clientIP(r, trustProxy, hops)
+	if !trustProxy {
+		return ip
+	}
+	if hops < 1 {
+		hops = 1
+	}
+	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	for i := 0; i <= len(parts)-hops; i++ {
+		s := strings.TrimSpace(parts[i])
+		if p := net.ParseIP(s); p != nil && probe.IsPublicIP(p) {
+			return p.String()
+		}
+	}
+	return ip
+}
+
 func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -301,6 +328,9 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		node = prev
 	}
 	id := node.ID
+	// Where the node is, as opposed to who connected to us (a CDN edge when the
+	// node uses a CDN domain).
+	publicIP := agentIP(r, h.cfg.TrustProxy, h.cfg.ProxyHops)
 
 	now := time.Now()
 	ac := &agentConn{
@@ -313,7 +343,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		status: protocol.AgentStatus{
 			ID: id, Name: firstNonEmpty(hello.Name, node.Name), Location: firstNonEmpty(hello.Location, node.Location),
 			ISP: firstNonEmpty(hello.ISP, node.ISP), Tags: hello.Tags,
-			OS: hello.OS, Arch: hello.Arch, Version: hello.Version, PublicIP: remoteIP,
+			OS: hello.OS, Arch: hello.Arch, Version: hello.Version, PublicIP: publicIP,
 			Capabilities: hello.Capabilities, LastSeen: now,
 			FirstSeen: node.FirstSeen, GeoLocation: node.GeoLocation, GeoISP: node.GeoISP,
 			GeoIP: node.GeoIP, GeoOverride: node.GeoOverride,
@@ -338,9 +368,13 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 		h.log.Info("agent reconnected, replacing previous connection", "agent", id)
 		old.close()
 	}
-	h.log.Info("agent connected", "agent", id, "ip", remoteIP, "arch", hello.Arch, "version", hello.Version, "auth", ac.status.Auth, "caps", strings.Join(hello.Capabilities, ","))
+	via := ""
+	if remoteIP != publicIP {
+		via = remoteIP
+	}
+	h.log.Info("agent connected", "agent", id, "ip", publicIP, "via", via, "arch", hello.Arch, "version", hello.Version, "auth", ac.status.Auth, "caps", strings.Join(hello.Capabilities, ","))
 
-	wel := protocol.Welcome{AgentID: id, PublicIP: remoteIP, ServerTime: now.UnixMilli()}
+	wel := protocol.Welcome{AgentID: id, PublicIP: publicIP, ServerTime: now.UnixMilli()}
 	if auth.legacy && hello.TokenHandoff {
 		if tok, err := h.store.AgentToken(id); err != nil {
 			h.log.Error("agent token", "agent", id, "err", err)
@@ -357,7 +391,7 @@ func (h *Hub) HandleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.geo != nil {
-		go h.lookupAgentGeo(ac, remoteIP)
+		go h.lookupAgentGeo(ac, publicIP)
 	}
 
 	go h.writeLoop(ac)

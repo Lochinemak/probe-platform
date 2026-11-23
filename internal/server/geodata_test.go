@@ -3,7 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +81,15 @@ func TestParseLabel(t *testing.T) {
 		{"US-LA", protocol.Geo{CC: "US", Country: "美国", City: "LA"}, true},
 		{"United States California", protocol.Geo{CC: "US", Country: "美国", City: "California"}, true},
 		{"Russia", protocol.Geo{CC: "RU", Country: "俄罗斯"}, true},
+		{"爱沙尼亚 塔林", protocol.Geo{CC: "EE", Country: "爱沙尼亚", City: "塔林"}, true},
+		{"Estonia", protocol.Geo{CC: "EE", Country: "爱沙尼亚"}, true},
+		{"EE Tallinn", protocol.Geo{CC: "EE", Country: "爱沙尼亚", City: "Tallinn"}, true},
+		{"印度尼西亚 雅加达", protocol.Geo{CC: "ID", Country: "印度尼西亚", City: "雅加达"}, true},
+		{"美国 马里兰", protocol.Geo{CC: "US", Country: "美国", City: "马里兰"}, true},
+		{"South Sudan", protocol.Geo{CC: "SS", Country: "南苏丹"}, true},
+		{"Papua New Guinea", protocol.Geo{CC: "PG", Country: "巴布亚新几内亚"}, true},
+		{"US New Jersey", protocol.Geo{CC: "US", Country: "美国", City: "New Jersey"}, true},
+		{"Tallin", protocol.Geo{}, false},
 		{"本机", protocol.Geo{}, false},
 		{"内网", protocol.Geo{}, false},
 		{"home nas", protocol.Geo{}, false},
@@ -297,5 +309,42 @@ func TestAnnotateTarget(t *testing.T) {
 		if r.TargetIP != c.want || r.TargetGeo != "" {
 			t.Errorf("%s %s: target %q geo %q, want %q", c.typ, c.data, r.TargetIP, r.TargetGeo, c.want)
 		}
+	}
+}
+
+// TestCountriesMirrored: the country picker in web/src/geo.js offers exactly
+// the countries this package knows, under the same names, so a correction
+// comes back named the way it was picked.
+func TestCountriesMirrored(t *testing.T) {
+	src, err := os.ReadFile("../../web/src/geo.js")
+	if err != nil {
+		t.Skip("web sources not found:", err)
+	}
+	js := string(src)
+	start, end := strings.Index(js, "export const COMMON_COUNTRIES"), strings.Index(js, "export const COUNTRIES")
+	if start < 0 || end < start {
+		t.Fatal("COMMON_COUNTRIES / COUNTRIES not found in geo.js")
+	}
+	pairs := regexp.MustCompile(`\['([A-Z]{2})', '([^']+)'\]`).FindAllStringSubmatch(js[start:end], -1)
+	seen := map[string]bool{}
+	for _, p := range pairs {
+		c, ok := countryByCode(p[1])
+		switch {
+		case !ok:
+			t.Errorf("geo.js offers %s %s, unknown here", p[1], p[2])
+		case c.zh != p[2]:
+			t.Errorf("%s is %q here and %q in geo.js", p[1], c.zh, p[2])
+		case seen[p[1]]:
+			t.Errorf("%s listed twice in geo.js", p[1])
+		}
+		seen[p[1]] = true
+	}
+	for _, c := range countries {
+		if !seen[c.cc] {
+			t.Errorf("%s %s is missing from geo.js", c.cc, c.zh)
+		}
+	}
+	if !seen["EE"] {
+		t.Error("Estonia missing")
 	}
 }
