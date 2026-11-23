@@ -521,8 +521,21 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 
 // --- settings ---------------------------------------------------------------
 
-func (a *API) getSettings(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.settings.View())
+func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.settingsView(r))
+}
+
+// settingsView is Settings.View plus what depends on the domain the dashboard
+// was opened on: a login that starts there comes back there, so that callback
+// has to be registered in Logto as well.
+func (a *API) settingsView(r *http.Request) SettingsView {
+	view := a.settings.View()
+	if view.BaseURL != "" {
+		if here := logtoRedirectURL(view.BaseURL, r); here != view.LogtoRedirectURL {
+			view.LogtoRedirectHere = here
+		}
+	}
+	return view
 }
 
 func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +558,7 @@ func (a *API) updateSettings(w http.ResponseWriter, r *http.Request) {
 		a.auth.setCookie(w, r, Session{Role: roleAdmin, Name: a.settings.AdminUser(), Via: "bootstrap"})
 	}
 	a.log.Info("settings updated", "by", a.cfg.ClientIP(r))
-	writeJSON(w, http.StatusOK, a.settings.View())
+	writeJSON(w, http.StatusOK, a.settingsView(r))
 }
 
 func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
@@ -578,11 +591,12 @@ func (a *API) testLogto(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "请先保存 Logto 地址、App ID 和站点地址")
 		return
 	}
-	if _, err := l.LoginURL(r.Context(), "test", "test-verifier-test-verifier-test-verifier-0000"); err != nil {
+	redirect := l.RedirectURLFor(r)
+	if _, err := l.LoginURL(r.Context(), "test", "test-verifier-test-verifier-test-verifier-0000", redirect); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issuer": l.issuer, "redirect_url": l.RedirectURL()})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "issuer": l.issuer, "redirect_url": redirect})
 }
 
 // logtoLogin starts the OIDC authorization code flow.
@@ -594,13 +608,16 @@ func (a *API) logtoLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	state := randomHex(16)
 	verifier := randomHex(32)
-	u, err := logto.LoginURL(r.Context(), state, verifier)
+	// The callback goes to the domain this login starts on, not always to the
+	// configured site address: the state cookie below is only sent back there.
+	redirect := logto.RedirectURLFor(r)
+	u, err := logto.LoginURL(r.Context(), state, verifier, redirect)
 	if err != nil {
 		a.log.Error("logto login", "err", err)
 		http.Redirect(w, r, "/?login_error="+url.QueryEscape("Logto 不可用："+err.Error()), http.StatusFound)
 		return
 	}
-	a.auth.setOIDCCookie(w, r, oidcState{State: state, Verifier: verifier})
+	a.auth.setOIDCCookie(w, r, oidcState{State: state, Verifier: verifier, Redirect: redirect})
 	http.Redirect(w, r, u, http.StatusFound)
 }
 
@@ -625,7 +642,7 @@ func (a *API) logtoCallback(w http.ResponseWriter, r *http.Request) {
 		fail("登录状态已过期或不匹配，请重试")
 		return
 	}
-	id, err := logto.Exchange(r.Context(), q.Get("code"), st.Verifier)
+	id, err := logto.Exchange(r.Context(), q.Get("code"), st.Verifier, st.Redirect)
 	if err != nil {
 		fail("换取令牌失败：" + err.Error())
 		return

@@ -407,6 +407,7 @@ deploy/                    Dockerfile、compose、systemd、安装 / 卸载脚�
 - **管理员**：右上角「管理员登录」。登录后「历史」页显示所有人的记录，并多一列「来源」（管理员用户名 / 游客 + 短 ID / 定时监控）。两种方式：
   - 用户名 + 密码：用户名在「设置」里改（默认 `admin`），密码在「设置 → 管理员密码」里改。改密码会让所有会话失效。
   - Logto（OIDC 授权码 + PKCE，服务端换取令牌并校验 ID Token）：在「设置 → Logto 登录」填 Logto 地址（如 `https://auth.example.com`，自动加 `/oidc`）、App ID、App Secret（Traditional Web 应用必填，Single Page App 留空）和管理员名单（逗号分隔的邮箱 / 用户名 / sub；**留空则拒绝所有 Logto 登录**——Logto 租户通常允许自助注册，把空名单当成「所有人都是管理员」等于把后台交给任何愿意注册的人），并在「常规」里填站点地址。页面会显示需要登记到 Logto 应用「Redirect URIs」的回调地址 `<站点地址>/api/auth/logto/callback`，「测试连接」按钮会做一次 OIDC 发现。密钥只写不读。
+  - 同一个服务挂了多个域名（比如再加一个镜像域名）时：从哪个域名点登录，Logto 就跳回哪个域名（回调地址按请求的 `Host` 和 `X-Forwarded-Proto` 生成，反向代理要像示例配置那样把这两个头传过来）。每个域名的回调地址都要登记到 Logto 应用的「Redirect URIs」；从非站点地址的域名打开「设置」页时，页面会多显示一行「当前域名的回调」供复制。节点页的安装命令同样跟随当前访问的域名。
 - 对应的引导环境变量：`PROBE_ADMIN_USER`、`PROBE_ADMIN_PASSWORD`、`PROBE_GUEST`、`PROBE_LOGTO_ENDPOINT`、`PROBE_LOGTO_APP_ID`、`PROBE_LOGTO_APP_SECRET`、`PROBE_LOGTO_ADMINS`、`PROBE_BASE_URL`、`PROBE_AGENT_IMAGE`。
 - 会话是 HMAC 签名的 Cookie（密钥随机生成并保存在数据库），30 天有效。
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +22,8 @@ type Logto struct {
 	issuer      string
 	clientID    string
 	secret      string
-	redirectURL string
+	baseURL     string
+	redirectURL string          // the callback on the configured site address
 	admins      map[string]bool // lower-cased sub / email / username; empty = every user
 	log         *slog.Logger
 
@@ -62,7 +65,8 @@ func NewLogto(cfg Config, log *slog.Logger) *Logto {
 		issuer:      issuer,
 		clientID:    cfg.LogtoAppID,
 		secret:      cfg.LogtoAppSecret,
-		redirectURL: strings.TrimSuffix(cfg.BaseURL, "/") + "/api/auth/logto/callback",
+		baseURL:     cfg.BaseURL,
+		redirectURL: logtoRedirectURL(cfg.BaseURL, nil),
 		admins:      admins,
 		log:         log,
 	}
@@ -79,6 +83,51 @@ func (l *Logto) HasAdmins() bool { return len(l.admins) > 0 }
 
 // RedirectURL is what must be registered in the Logto application.
 func (l *Logto) RedirectURL() string { return l.redirectURL }
+
+// RedirectURLFor is the callback for a login that starts with r: on the site
+// the visitor is actually using, so a second domain in front of the same
+// server (a mirror) gets its visitors back.
+func (l *Logto) RedirectURLFor(r *http.Request) string { return logtoRedirectURL(l.baseURL, r) }
+
+const logtoCallbackPath = "/api/auth/logto/callback"
+
+// logtoRedirectURL builds the callback address. A request that came in on the
+// configured site address (or no request at all) gets exactly that address, so
+// a proxy that does not pass X-Forwarded-Proto keeps working. A request for
+// any other host gets its own origin: the state cookie of the login lives on
+// that host, and a callback anywhere else could not read it.
+//
+// Taking the host from the request is safe because the provider only redirects
+// to addresses registered in the application; an unregistered host ends on the
+// provider's error page, not here.
+func logtoRedirectURL(baseURL string, r *http.Request) string {
+	base := strings.TrimSuffix(baseURL, "/")
+	if r == nil || r.Host == "" {
+		return base + logtoCallbackPath
+	}
+	prefix := ""
+	if u, err := url.Parse(base); err == nil {
+		if strings.EqualFold(u.Host, r.Host) {
+			return base + logtoCallbackPath
+		}
+		prefix = strings.TrimSuffix(u.Path, "/")
+	}
+	origin := requestOrigin(r)
+	if u, err := url.Parse(origin); err != nil || u.Host != r.Host || u.Path != "" {
+		return base + logtoCallbackPath // a Host that does not survive as one
+	}
+	return origin + prefix + logtoCallbackPath
+}
+
+// requestOrigin is scheme://host as the visitor's browser has it. Behind a
+// reverse proxy that needs the Host header passed through and
+// X-Forwarded-Proto set, as the bundled proxy examples do.
+func requestOrigin(r *http.Request) string {
+	if secureCookie(r) {
+		return "https://" + r.Host
+	}
+	return "http://" + r.Host
+}
 
 func (l *Logto) init(ctx context.Context) error {
 	l.mu.Lock()
@@ -104,22 +153,34 @@ func (l *Logto) init(ctx context.Context) error {
 	return nil
 }
 
-// LoginURL builds the authorization URL for a fresh state/verifier pair.
-func (l *Logto) LoginURL(ctx context.Context, state, verifier string) (string, error) {
+// oauthFor is the OAuth client with the given callback; "" means the one on
+// the configured site address.
+func (l *Logto) oauthFor(redirect string) *oauth2.Config {
+	c := *l.oauth
+	if redirect != "" {
+		c.RedirectURL = redirect
+	}
+	return &c
+}
+
+// LoginURL builds the authorization URL for a fresh state/verifier pair, with
+// redirect (from RedirectURLFor) as the callback.
+func (l *Logto) LoginURL(ctx context.Context, state, verifier, redirect string) (string, error) {
 	if err := l.init(ctx); err != nil {
 		return "", err
 	}
-	return l.oauth.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), nil
+	return l.oauthFor(redirect).AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), nil
 }
 
-// Exchange turns the callback code into a verified identity.
-func (l *Logto) Exchange(ctx context.Context, code, verifier string) (*Identity, error) {
+// Exchange turns the callback code into a verified identity. redirect must be
+// the callback the login was started with: the provider compares the two.
+func (l *Logto) Exchange(ctx context.Context, code, verifier, redirect string) (*Identity, error) {
 	if err := l.init(ctx); err != nil {
 		return nil, err
 	}
 	tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	tok, err := l.oauth.Exchange(tctx, code, oauth2.VerifierOption(verifier))
+	tok, err := l.oauthFor(redirect).Exchange(tctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)
 	}

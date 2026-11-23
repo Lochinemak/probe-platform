@@ -109,8 +109,13 @@ onMounted(load)
         <div class="kv">
           <div>应用类型</div><div>Traditional Web（需要 App Secret）或 Single Page App（只用 PKCE，密钥留空）</div>
           <div>Redirect URI</div><div class="mono">{{ view.logto_redirect_url || '（先在下方填写站点地址）' }} <button v-if="view.logto_redirect_url" type="button" class="btn link sm" @click="copy(view.logto_redirect_url)">复制</button></div>
+          <template v-if="view.logto_redirect_here">
+            <div>当前域名的回调</div><div class="mono">{{ view.logto_redirect_here }} <button type="button" class="btn link sm" @click="copy(view.logto_redirect_here)">复制</button></div>
+          </template>
           <div>Scopes</div><div class="mono">openid profile email</div>
         </div>
+        <p class="sub" v-if="view.logto_redirect_here" style="margin:8px 0 0"><span class="badge warn">多域名</span>
+          你现在是从另一个域名打开的本站。从哪个域名点登录，Logto 就跳回哪个域名，所以这个域名的 Redirect URI 也要登记到 Logto 应用里，否则 Logto 会提示 redirect_uri 不匹配。</p>
         <p class="sub" style="margin:8px 0 0">把 Redirect URI 登记到 Logto 应用的「Redirect URIs」，保存后右上角登录框会出现「通过 Logto 登录」。建议先设好管理员密码再启用 Logto：万一 Logto 配置有误，还能用密码登录回来改。</p>
       </div>
     </div>

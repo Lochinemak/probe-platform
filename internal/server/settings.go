@@ -59,11 +59,14 @@ type SettingsView struct {
 	LogtoSecretSet   bool   `json:"logto_secret_set"`
 	LogtoAdmins      string `json:"logto_admins"`
 	LogtoRedirectURL string `json:"logto_redirect_url"`
-	LogtoEnabled     bool   `json:"logto_enabled"`
-	BaseURL          string `json:"base_url"`
-	AgentImage       string `json:"agent_image"`
-	LoginEnabled     bool   `json:"login_enabled"`
-	LegacyAgentToken string `json:"legacy_agent_token"` // none, enabled, disabled
+	// LogtoRedirectHere is the callback for the domain this request came in
+	// on, when that is not the site address (API.settingsView fills it).
+	LogtoRedirectHere string `json:"logto_redirect_here,omitempty"`
+	LogtoEnabled      bool   `json:"logto_enabled"`
+	BaseURL           string `json:"base_url"`
+	AgentImage        string `json:"agent_image"`
+	LoginEnabled      bool   `json:"login_enabled"`
+	LegacyAgentToken  string `json:"legacy_agent_token"` // none, enabled, disabled
 }
 
 // SettingsPatch is a partial update; nil fields are left unchanged. An empty
@@ -162,7 +165,7 @@ func (s *Settings) View() SettingsView {
 		view.PasswordSource = "env"
 	}
 	if v.BaseURL != "" {
-		view.LogtoRedirectURL = strings.TrimSuffix(v.BaseURL, "/") + "/api/auth/logto/callback"
+		view.LogtoRedirectURL = logtoRedirectURL(v.BaseURL, nil)
 	}
 	view.LogtoEnabled = s.Logto() != nil
 	view.LoginEnabled = view.PasswordSet || view.LogtoEnabled

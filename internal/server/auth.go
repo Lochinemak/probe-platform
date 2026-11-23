@@ -248,6 +248,7 @@ func (s *sessionAuth) clearCookie(w http.ResponseWriter) {
 type oidcState struct {
 	State    string `json:"s"`
 	Verifier string `json:"v"`
+	Redirect string `json:"r,omitempty"` // the callback this login was started with
 	Exp      int64  `json:"e"`
 }
 
