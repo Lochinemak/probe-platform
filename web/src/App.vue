@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { api } from './api.js'
 import { route, navigate, taskPath } from './route.js'
+import { theme, cycleTheme, applyTheme } from './theme.js'
 import ProbeView from './views/Probe.vue'
 import AgentsView from './views/Agents.vue'
 import HistoryView from './views/History.vue'
@@ -40,6 +41,10 @@ function go(name, replace = false) {
   menuOpen.value = false
   if (route.page === name && !route.taskId) return
   navigate(name === 'probe' ? '/' : '/' + name, { replace })
+}
+function goHome() {
+  if (sharing.value) window.location.href = '/'
+  else go('probe')
 }
 const menuOpen = ref(false)
 function onDocClick(e) { if (!e.target.closest?.('.nav-menu')) menuOpen.value = false }
@@ -96,7 +101,11 @@ function onUnauthorized() {
 function openTask(id) { navigate(taskPath(id)) }
 async function onRelogin(msg) { await loadSession(); loginError.value = msg || ''; showLogin.value = true }
 
+const THEME_LABEL = { auto: '跟随系统', dark: '深色', light: '浅色' }
+function onDocKeydown(e) { if (e.key === 'Escape' && showLogin.value && !gated.value) closeLogin() }
+
 onMounted(() => {
+  applyTheme()
   if (route.query.login_error) {
     loginError.value = route.query.login_error
     showLogin.value = true
@@ -107,76 +116,97 @@ onMounted(() => {
   loadSession()
   window.addEventListener('probe:unauthorized', onUnauthorized)
   document.addEventListener('click', onDocClick)
+  window.addEventListener('keydown', onDocKeydown)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('probe:unauthorized', onUnauthorized)
   document.removeEventListener('click', onDocClick)
+  window.removeEventListener('keydown', onDocKeydown)
 })
 // The probe page titles itself after the probe type.
 watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].label} · 拨测平台`; ensureAllowed() }, { immediate: true })
 </script>
 
 <template>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand"><span class="dot"></span> 拨测平台</div>
-      <nav class="nav" v-if="session && !gated && !sharing">
-        <template v-for="(def, name) in TABS" :key="name">
-          <button v-if="!def.menu && (!def.admin || isAdmin)" :class="{ active: tab === name }" :aria-current="tab === name ? 'page' : undefined" @click="go(name)">{{ def.label }}</button>
-        </template>
-        <div class="nav-menu" v-if="isAdmin">
-          <button :class="{ active: TABS[tab]?.menu }" aria-haspopup="menu" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">{{ TABS[tab]?.menu ? TABS[tab].label : '管理' }} ▾</button>
-          <div class="nav-pop" v-if="menuOpen" role="menu">
-            <template v-for="(def, name) in TABS" :key="name">
-              <button v-if="def.menu" role="menuitem" :class="{ active: tab === name }" @click="go(name)">{{ def.label }}</button>
-            </template>
+  <div>
+    <div class="topbar-wrap">
+      <header class="topbar">
+        <button type="button" class="brand" @click="goHome">
+          <span class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 36 28" fill="none">
+              <path d="M9 7.5a11 11 0 0 0 0 13" stroke="currentColor" stroke-opacity=".35" stroke-width="2" stroke-linecap="round" />
+              <path d="M5.5 4.5a15.5 15.5 0 0 0 0 19" stroke="currentColor" stroke-opacity=".18" stroke-width="2" stroke-linecap="round" />
+              <path d="M27 7.5a11 11 0 0 1 0 13" stroke="currentColor" stroke-opacity=".35" stroke-width="2" stroke-linecap="round" />
+              <path d="M30.5 4.5a15.5 15.5 0 0 1 0 19" stroke="currentColor" stroke-opacity=".18" stroke-width="2" stroke-linecap="round" />
+              <path d="M18 4a7 7 0 0 0-7 7c0 5.1 7 12.2 7 12.2S25 16.1 25 11a7 7 0 0 0-7-7z" fill="currentColor" />
+              <circle cx="18" cy="11" r="2.7" fill="#fff" />
+            </svg>
+          </span>
+          <span>拨测平台</span>
+        </button>
+        <nav class="nav" v-if="session && !gated && !sharing">
+          <template v-for="(def, name) in TABS" :key="name">
+            <button v-if="!def.menu && (!def.admin || isAdmin)" :class="{ active: tab === name }" :aria-current="tab === name ? 'page' : undefined" @click="go(name)">{{ def.label }}</button>
+          </template>
+          <div class="nav-menu" v-if="isAdmin">
+            <button :class="{ active: TABS[tab]?.menu }" aria-haspopup="menu" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">{{ TABS[tab]?.menu ? TABS[tab].label : '管理' }} ▾</button>
+            <div class="nav-pop" v-if="menuOpen" role="menu">
+              <template v-for="(def, name) in TABS" :key="name">
+                <button v-if="def.menu" role="menuitem" :class="{ active: tab === name }" @click="go(name)">{{ def.label }}</button>
+              </template>
+            </div>
           </div>
+        </nav>
+        <div v-else></div>
+        <div class="meta">
+          <button type="button" class="pill-btn theme-btn" :title="`外观主题：${THEME_LABEL[theme]}（点击切换）`" :aria-label="`切换主题，当前：${THEME_LABEL[theme]}`" @click="cycleTheme">
+            <svg v-if="theme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
+            <svg v-else-if="theme === 'light'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+            <span>{{ THEME_LABEL[theme] }}</span>
+          </button>
+          <a class="pill-btn" v-if="sharing" href="/">发起新的探测</a>
+          <template v-else-if="session">
+            <span class="ver-pill" v-if="session.version">v{{ session.version }}</span>
+            <template v-if="session.auth_required">
+              <template v-if="isAdmin">
+                <span class="badge ok" :title="session.user?.via === 'logto' ? '通过 Logto 登录' : '密码登录'">{{ session.user?.name || '管理员' }}</span>
+                <button class="pill-btn" @click="logout">退出</button>
+              </template>
+              <template v-else>
+                <span class="badge">游客</span>
+                <button class="pill-btn" @click="showLogin = true; loginError = ''">管理员登录</button>
+              </template>
+            </template>
+          </template>
         </div>
-      </nav>
-      <div class="spacer"></div>
-      <a class="btn sm" v-if="sharing" href="/">发起新的探测</a>
-      <div class="meta" v-if="session && !sharing">
-        <span v-if="session.version">v{{ session.version }}</span>
-        <template v-if="session.auth_required">
-          <template v-if="isAdmin">
-            <span class="badge ok" :title="session.user?.via === 'logto' ? '通过 Logto 登录' : '密码登录'">{{ session.user?.name || '管理员' }}</span>
-            <button class="btn sm" @click="logout">退出</button>
-          </template>
-          <template v-else>
-            <span class="badge">游客</span>
-            <button class="btn sm" @click="showLogin = true; loginError = ''">管理员登录</button>
-          </template>
-        </template>
-      </div>
-    </header>
-
-    <SharePage v-if="sharing" :token="route.token" />
-
-    <div v-else-if="!session" class="empty">加载中…</div>
-
-    <!-- Login: full page when guests are off, modal otherwise -->
-    <div v-else-if="gated || showLogin" class="card login" :class="{ modal: !gated }">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="margin:0">管理员登录</h2>
-        <span class="spacer"></span>
-        <button v-if="!gated" class="btn sm" type="button" @click="closeLogin">关闭</button>
-      </div>
-      <form @submit.prevent="login" v-if="session.login?.password">
-        <div class="field"><label>用户名</label><input type="text" v-model="username" autocomplete="username" /></div>
-        <div class="field" style="margin-top:8px"><label>密码</label><input type="password" v-model="password" autofocus autocomplete="current-password" /></div>
-        <div class="error-box" v-if="loginError" style="margin-top:10px">{{ loginError }}</div>
-        <button class="btn primary" style="margin-top:14px;width:100%" :disabled="busy || !password">登录</button>
-      </form>
-      <div class="error-box" v-else-if="loginError" style="margin-top:10px">{{ loginError }}</div>
-      <div v-if="session.login?.logto" style="margin-top:12px">
-        <div class="sub" style="text-align:center;margin:8px 0" v-if="session.login?.password">或</div>
-        <a class="btn" style="display:block;text-align:center" href="/api/auth/logto/login">通过 Logto 登录</a>
-      </div>
-      <p class="sub" v-if="!gated" style="margin:12px 0 0">游客可以直接使用拨测功能；登录后可管理监控、通知渠道和节点。</p>
+      </header>
     </div>
 
-    <template v-if="session && !gated && !sharing">
-      <div v-show="!showLogin">
+    <main class="app">
+      <SharePage v-if="sharing" :token="route.token" />
+
+      <div v-else-if="!session" class="empty">加载中…</div>
+
+      <!-- Full-page login when guest access is disabled -->
+      <div v-else-if="gated" class="card login">
+        <div class="row" style="margin-bottom:14px">
+          <h2 style="margin:0">管理员登录</h2>
+        </div>
+        <form @submit.prevent="login" v-if="session.login?.password">
+          <div class="field"><label>用户名</label><input type="text" v-model="username" autocomplete="username" /></div>
+          <div class="field" style="margin-top:10px"><label>密码</label><input type="password" v-model="password" autofocus autocomplete="current-password" /></div>
+          <div class="error-box" v-if="loginError" style="margin-top:12px">{{ loginError }}</div>
+          <button class="btn primary" style="margin-top:16px;width:100%" :disabled="busy || !password">登录</button>
+        </form>
+        <div class="error-box" v-else-if="loginError" style="margin-top:10px">{{ loginError }}</div>
+        <div v-if="session.login?.logto" style="margin-top:12px">
+          <div class="sub" style="text-align:center;margin:8px 0" v-if="session.login?.password">或</div>
+          <a class="btn" style="display:flex;width:100%" href="/api/auth/logto/login">通过 Logto 登录</a>
+        </div>
+      </div>
+
+      <template v-else>
         <ProbeView v-show="tab === 'probe'" :role="session.role" />
         <IpLookupView v-if="tab === 'ip'" />
         <CoverageView v-if="tab === 'coverage'" />
@@ -187,7 +217,30 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
         <SettingsView v-if="tab === 'settings' && isAdmin" @relogin="onRelogin" />
         <AgentsView v-if="tab === 'agents'" :agent-image="session.agent_image" :server-version="session.version" :admin="isAdmin" />
         <HistoryView v-if="tab === 'history'" :admin="isAdmin" />
-      </div>
-    </template>
+
+        <!-- Modal login when guest access is enabled -->
+        <div v-if="showLogin" class="backdrop" @click.self="closeLogin">
+          <div class="card login modal" role="dialog" aria-modal="true" aria-label="管理员登录">
+            <div class="row" style="margin-bottom:14px">
+              <h2 style="margin:0">管理员登录</h2>
+              <span class="spacer"></span>
+              <button class="btn sm" type="button" @click="closeLogin">关闭</button>
+            </div>
+            <form @submit.prevent="login" v-if="session.login?.password">
+              <div class="field"><label>用户名</label><input type="text" v-model="username" autocomplete="username" /></div>
+              <div class="field" style="margin-top:10px"><label>密码</label><input type="password" v-model="password" autofocus autocomplete="current-password" /></div>
+              <div class="error-box" v-if="loginError" style="margin-top:12px">{{ loginError }}</div>
+              <button class="btn primary" style="margin-top:16px;width:100%" :disabled="busy || !password">登录</button>
+            </form>
+            <div class="error-box" v-else-if="loginError" style="margin-top:10px">{{ loginError }}</div>
+            <div v-if="session.login?.logto" style="margin-top:12px">
+              <div class="sub" style="text-align:center;margin:8px 0" v-if="session.login?.password">或</div>
+              <a class="btn" style="display:flex;width:100%" href="/api/auth/logto/login">通过 Logto 登录</a>
+            </div>
+            <p class="sub" style="margin:14px 0 0">游客可以直接使用拨测功能；登录后可管理监控、通知渠道和节点。</p>
+          </div>
+        </div>
+      </template>
+    </main>
   </div>
 </template>

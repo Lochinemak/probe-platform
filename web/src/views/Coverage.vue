@@ -91,18 +91,18 @@ const totals = computed(() => tally(agents.value))
         <div class="sub">节点分布在哪些地区、哪些线路，哪里只剩离线节点</div>
       </div>
       <span class="spacer"></span>
-      <div class="tabs sm" v-if="MAP_SCOPES.length > 1" role="group" aria-label="地图范围">
+      <div class="tabs sm solid" v-if="MAP_SCOPES.length > 1" role="group" aria-label="地图范围">
         <button v-for="s in MAP_SCOPES" :key="s.id" type="button" :class="{ active: scope === s.id }" @click="scope = s.id">{{ s.label }}</button>
       </div>
       <button class="btn sm" type="button" @click="load">刷新</button>
     </div>
 
     <div class="stats five">
-      <div class="stat"><div class="stat-label">在线节点</div><div class="stat-value">{{ stats.online }}<span class="sub"> / {{ stats.total }}</span></div><div class="sub">其中中国大陆 {{ stats.mainland }}</div></div>
+      <div class="stat"><div class="stat-label">在线节点</div><div class="stat-value ok">{{ stats.online }}<span class="sub"> / {{ stats.total }}</span></div><div class="sub">其中中国大陆 {{ stats.mainland }}</div></div>
       <div class="stat"><div class="stat-label">已覆盖省级行政区</div><div class="stat-value">{{ stats.provinces }}</div><div class="sub">有在线节点，含港澳台</div></div>
       <div class="stat"><div class="stat-label">海外国家或地区</div><div class="stat-value">{{ stats.countries }}</div><div class="sub">有在线节点</div></div>
-      <div class="stat"><div class="stat-label">无在线节点的地区</div><div class="stat-value" :class="{ warn: stats.offlineOnly > 0 }">{{ stats.offlineOnly }}</div><div class="sub">有节点但全部离线</div></div>
-      <div class="stat"><div class="stat-label">地域未识别</div><div class="stat-value" :class="{ warn: stats.unknown > 0 }">{{ stats.unknown }}</div><div class="sub">可在「节点」页修正</div></div>
+      <div class="stat" :class="{ 'warn-card': stats.offlineOnly > 0 }"><div class="stat-label">无在线节点的地区</div><div class="stat-value" :class="{ warn: stats.offlineOnly > 0 }">{{ stats.offlineOnly }}</div><div class="sub">有节点但全部离线</div></div>
+      <div class="stat" :class="{ 'warn-card': stats.unknown > 0 }"><div class="stat-label">地域未识别</div><div class="stat-value" :class="{ warn: stats.unknown > 0 }">{{ stats.unknown }}</div><div class="sub">可在「节点」页修正</div></div>
     </div>
 
     <div class="coverage-main">
@@ -123,12 +123,18 @@ const totals = computed(() => tally(agents.value))
 
       <div class="card">
         <div class="row">
-          <h3 style="margin:0">{{ pickedName || '全部节点' }} <span class="sub">在线 {{ panel.online }} / 共 {{ panel.total }}</span></h3>
+          <h3 style="margin:0">{{ pickedName || '全国 / 全部概览' }}</h3>
+          <span class="badge" v-if="!picked">未选择地区</span>
           <span class="spacer"></span>
           <button v-if="picked" class="btn link sm" type="button" @click="picked = ''">查看全部</button>
         </div>
-        <p class="sub" v-if="!picked && MAP_SCOPES.length" style="margin:6px 0 0">点击地图上有节点的地区，查看那里各线路的情况。</p>
-        <div class="table-wrap" style="margin-top:10px">
+        <p class="sub" v-if="!picked && MAP_SCOPES.length" style="margin:6px 0 0">点击左侧地图上有节点的地区，查看各线路分布情况。</p>
+        <div class="panel-kpis">
+          <div class="panel-kpi"><span>在线</span><b class="ok">{{ panel.online }}</b></div>
+          <div class="panel-kpi"><span>总节点</span><b>{{ panel.total }}</b></div>
+          <div class="panel-kpi"><span>涉及线路</span><b>{{ panelLines.length }}</b></div>
+        </div>
+        <div class="table-wrap">
           <table class="grid">
             <thead><tr><th>线路</th><th class="num">在线 / 总数</th><th>占比</th><th>状态</th></tr></thead>
             <tbody>

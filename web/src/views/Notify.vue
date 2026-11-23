@@ -93,23 +93,25 @@ onMounted(load)
         <span class="spacer"></span>
         <button class="btn primary sm" style="padding:6px 14px" @click="startCreate" v-if="!editing">新建渠道</button>
       </div>
-      <table class="grid">
-        <thead><tr><th></th><th>名称</th><th>类型</th><th>配置</th><th></th></tr></thead>
-        <tbody>
-          <tr v-for="c in channels" :key="c.id">
-            <td><span class="status-dot" :class="{ online: c.enabled }"></span></td>
-            <td><b>{{ c.name }}</b></td>
-            <td>{{ typeLabels[c.type] || c.type }}</td>
-            <td class="sub mono" style="white-space:normal">{{ [...Object.entries(c.config).filter(([, v]) => v).map(([k, v]) => k + '=' + v), ...Object.entries(c.secret_set || {}).filter(([, set]) => set).map(([k]) => k + '=已保存')].join('  ') }}</td>
-            <td>
-              <button class="btn sm" @click="test(c)" :disabled="testing === c.id">{{ testing === c.id ? '发送中…' : '发送测试' }}</button>
-              <button class="btn sm" @click="startEdit(c)">编辑</button>
-              <button class="btn sm danger" @click="remove(c)">删除</button>
-            </td>
-          </tr>
-          <tr v-if="!channels.length"><td colspan="5" class="empty">还没有通知渠道。支持 Telegram、企业微信、钉钉、Bark、PushDeer（含自建）、Gotify、通用 Webhook 和邮件。</td></tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table class="grid">
+          <thead><tr><th></th><th>名称</th><th>类型</th><th>配置</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="c in channels" :key="c.id">
+              <td><span class="status-dot" :class="{ online: c.enabled }"></span></td>
+              <td><b>{{ c.name }}</b></td>
+              <td>{{ typeLabels[c.type] || c.type }}</td>
+              <td class="sub mono" style="white-space:normal">{{ [...Object.entries(c.config).filter(([, v]) => v).map(([k, v]) => k + '=' + v), ...Object.entries(c.secret_set || {}).filter(([, set]) => set).map(([k]) => k + '=已保存')].join('  ') }}</td>
+              <td>
+                <button class="btn sm" @click="test(c)" :disabled="testing === c.id">{{ testing === c.id ? '发送中…' : '发送测试' }}</button>
+                <button class="btn sm" style="margin-left:6px" @click="startEdit(c)">编辑</button>
+                <button class="btn sm danger" style="margin-left:6px" @click="remove(c)">删除</button>
+              </td>
+            </tr>
+            <tr v-if="!channels.length"><td colspan="5" class="empty">还没有通知渠道。支持 Telegram、企业微信、钉钉、Bark、PushDeer（含自建）、Gotify、通用 Webhook 和邮件。</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>

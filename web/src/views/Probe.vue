@@ -346,8 +346,15 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
 
 <template>
   <div>
-    <StatCards v-if="!task" />
+    <section class="hero" v-if="!task && !zen">
+      <div class="hero-badge">分布式多地网络探测节点池</div>
+      <h1>全网状态，<span class="hero-accent">一触即测</span></h1>
+      <p>瞬时发起多地拨测，覆盖中国大陆各省与全球多地区网络。</p>
+    </section>
 
+    <StatCards v-if="!task && !zen" />
+
+    <div class="workbench-wrap">
     <div class="notice" v-if="lastTask && !task && !zen">
       <span>上次检测：<span class="badge" :class="lastTask.type">{{ TYPE_INFO[lastTask.type]?.label || lastTask.type }}</span> <span class="mono">{{ lastTask.target }}</span> <span class="sub" :title="fmtTime(lastTask.at)">{{ timeAgo(lastTask.at) }}</span></span>
       <span class="spacer"></span>
@@ -356,18 +363,22 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
     </div>
 
     <div class="card probe-form" v-show="!zen">
-      <div class="row" style="margin-bottom:14px">
+      <div class="row probe-head">
         <div class="tabs types" role="tablist" aria-label="检测类型">
           <button v-for="t in types" :key="t" type="button" role="tab" :aria-selected="type === t" :class="{ active: type === t }" @click="setType(t)">{{ TYPE_INFO[t].label }}</button>
         </div>
-        <span class="sub">{{ info.desc }}</span>
+        <span class="probe-desc">{{ info.desc }}</span>
       </div>
 
       <form class="probe-main" @submit.prevent="run('once')">
-        <div class="target-box" v-if="type === 'status'"><input class="target-input" type="text" disabled :placeholder="info.placeholder" aria-label="探测目标" /></div>
+        <div class="target-box" v-if="type === 'status'">
+          <span class="target-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+          <input class="target-input" type="text" disabled :placeholder="info.placeholder" aria-label="探测目标" />
+        </div>
         <TargetInput v-else ref="targetBox" v-model="target" :items="recent" :placeholder="info.placeholder" :invalid="!!targetError" @remove="removeRecent" @clear="clearRecent">
-          <template #prefix v-if="type === 'http'">
-            <div class="tabs sm" role="group" aria-label="协议">
+          <template #prefix>
+            <span class="target-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+            <div v-if="type === 'http'" class="tabs sm solid" role="group" aria-label="协议">
               <button type="button" :class="{ active: scheme === 'https' }" @click="setScheme('https')">HTTPS</button>
               <button type="button" :class="{ active: scheme === 'http' }" @click="setScheme('http')">HTTP</button>
             </div>
@@ -377,36 +388,59 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
         <div class="probe-actions">
           <button v-if="running" class="btn stop" type="button" :disabled="stopping" @click="stop">{{ stopping ? '正在停止…' : '停止检测' }}</button>
           <template v-else-if="hasContinuous">
-            <button class="btn primary" type="submit">检测</button>
+            <button class="btn primary" type="submit">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+              <span>发起检测</span>
+            </button>
             <button class="btn outline" type="button" @click="run('continuous')" :title="`持续采样 ${cont.count} 次，间隔 ${cont.interval_ms} ms，统计丢包和抖动`">持续检测</button>
           </template>
-          <button v-else class="btn primary" type="submit">发起检测</button>
+          <button v-else class="btn primary" type="submit">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+            <span>发起检测</span>
+          </button>
         </div>
       </form>
       <div class="field-error" v-if="targetError" role="alert">{{ targetError }}</div>
 
-      <div class="row probe-opts">
-        <span class="sub">{{ info.hint }}<template v-if="hasContinuous"> · 持续检测：{{ cont.count }} 次 · {{ cont.interval_ms }} ms</template></span>
+      <div class="probe-net row" v-if="hasNet || type === 'http' || type === 'mtr' || type !== 'status'">
+        <template v-if="hasNet">
+          <div class="field"><label>目标解析 DNS</label>
+            <select v-model="net.resolver_mode"><option value="system">节点系统 DNS</option><option value="public">指定公共 DNS</option><option value="custom">自定义 DNS</option></select>
+          </div>
+          <div class="field" v-if="net.resolver_mode === 'public'"><label>DNS 服务器</label>
+            <select v-model="net.resolver_public"><option v-for="[ip, label] in PUBLIC_DNS" :key="ip" :value="ip">{{ label }}</option></select>
+          </div>
+          <div class="field grow" v-if="net.resolver_mode === 'custom'"><label>DNS 服务器</label>
+            <input type="text" v-model="net.resolver_custom" placeholder="8.8.8.8 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
+        </template>
+        <div class="field" v-if="type === 'http'"><label>HTTP 版本</label>
+          <div class="tabs sm" role="group" aria-label="HTTP 版本">
+            <button type="button" :class="{ active: !httpExtra.http3 }" title="HTTP/1.1 或 HTTP/2（TCP），由服务器协商" @click="setHttp3(false)">HTTP/1.1 · 2</button>
+            <button type="button" :class="{ active: httpExtra.http3 }" title="HTTP/3（QUIC，走 UDP 443）；只支持 https，握手耗时记在 TLS 一栏" @click="setHttp3(true)">HTTP/3</button>
+          </div>
+        </div>
+        <div class="field" v-if="type === 'http'"><label>请求模式</label>
+          <div class="tabs sm" role="group" aria-label="请求模式">
+            <button type="button" :class="{ active: httpMode === 'simple' }" title="一次普通 GET，只看状态码和耗时" @click="httpMode = 'simple'">简易</button>
+            <button type="button" :class="{ active: httpMode === 'full' }" title="自定义方法、次数、断言等完整请求选项" @click="httpMode = 'full'">完整</button>
+          </div>
+        </div>
+        <div class="field" v-if="type === 'mtr'"><label>路由分析方式</label>
+          <div class="tabs sm" role="group" aria-label="路由分析方式">
+            <button type="button" :class="{ active: mtrExtra.quick }" title="每个节点只走一轮，快速看路径上有哪些跳点" @click="mtrExtra.quick = true">快速路径</button>
+            <button type="button" :class="{ active: !mtrExtra.quick }" title="多轮采样，统计每一跳的丢包、平均延迟和抖动" @click="mtrExtra.quick = false">持续统计</button>
+          </div>
+        </div>
         <span class="spacer"></span>
-        <div class="tabs sm" v-if="type === 'http'" role="group" aria-label="HTTP 版本">
-          <button type="button" :class="{ active: !httpExtra.http3 }" title="HTTP/1.1 或 HTTP/2（TCP），由服务器协商" @click="setHttp3(false)">HTTP/1.1 · 2</button>
-          <button type="button" :class="{ active: httpExtra.http3 }" title="HTTP/3（QUIC，走 UDP 443）；只支持 https，握手耗时记在 TLS 一栏" @click="setHttp3(true)">HTTP/3</button>
+        <div class="field" v-if="type !== 'status'"><label>协议栈</label>
+          <div class="tabs sm" role="group" aria-label="协议栈">
+            <button v-for="[v, label] in [['', '自动'], ['4', 'IPv4'], ['6', 'IPv6']]" :key="v" type="button" :class="{ active: (params[type].ip_version || '') === v }" @click="params[type].ip_version = v">{{ label }}</button>
+          </div>
         </div>
-        <div class="tabs sm" v-if="type === 'http'" role="group" aria-label="请求模式">
-          <button type="button" :class="{ active: httpMode === 'simple' }" title="一次普通 GET，只看状态码和耗时" @click="httpMode = 'simple'">简易</button>
-          <button type="button" :class="{ active: httpMode === 'full' }" title="自定义方法、次数、断言等完整请求选项" @click="httpMode = 'full'">完整</button>
-        </div>
-        <div class="tabs sm" v-if="type === 'mtr'" role="group" aria-label="路由分析方式">
-          <button type="button" :class="{ active: mtrExtra.quick }" title="每个节点只走一轮，快速看路径上有哪些跳点" @click="mtrExtra.quick = true">快速路径</button>
-          <button type="button" :class="{ active: !mtrExtra.quick }" title="多轮采样，统计每一跳的丢包、平均延迟和抖动" @click="mtrExtra.quick = false">持续统计</button>
-        </div>
-        <div class="tabs sm" v-if="type !== 'status'" role="group" aria-label="协议栈">
-          <button v-for="[v, label] in [['', '自动'], ['4', 'IPv4'], ['6', 'IPv6']]" :key="v" type="button" :class="{ active: (params[type].ip_version || '') === v }" @click="params[type].ip_version = v">{{ label }}</button>
-        </div>
-        <button class="btn sm" v-if="type !== 'status'" type="button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">{{ showAdvanced ? '收起选项' : '高级选项' }}</button>
+        <span class="sub" v-if="needResolver" style="flex-basis:100%">指定连接 IP 与指定解析 DNS 需要较新的 agent，版本过旧的节点已在下面置灰。</span>
       </div>
 
-      <div class="row" v-if="type === 'dns_compare'" style="margin-top:12px;gap:16px">
+      <div class="sub-panel row" v-if="type === 'dns_compare'" style="gap:16px">
         <div class="field"><label>记录类型</label>
           <select v-model="params.dns_compare.record_type"><option v-for="t in ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT']" :key="t">{{ t }}</option></select>
         </div>
@@ -422,19 +456,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
         <span class="sub" v-else style="margin-top:18px">{{ compareServers.map((s) => (s === 'system' ? '系统 DNS' : s)).join('、') }}</span>
       </div>
 
-      <div class="row" v-if="hasNet" style="margin-top:12px;gap:16px">
-        <div class="field"><label>目标解析 DNS</label>
-          <select v-model="net.resolver_mode"><option value="system">节点系统 DNS</option><option value="public">指定公共 DNS</option><option value="custom">自定义 DNS</option></select>
-        </div>
-        <div class="field" v-if="net.resolver_mode === 'public'"><label>DNS 服务器</label>
-          <select v-model="net.resolver_public"><option v-for="[ip, label] in PUBLIC_DNS" :key="ip" :value="ip">{{ label }}</option></select>
-        </div>
-        <div class="field grow" v-if="net.resolver_mode === 'custom'"><label>DNS 服务器</label>
-          <input type="text" v-model="net.resolver_custom" placeholder="8.8.8.8 · 119.29.29.29:53 · tcp://1.1.1.1 · https://doh.pub/dns-query" spellcheck="false" /></div>
-        <span class="sub" v-if="needResolver" style="margin-top:18px">指定连接 IP 与指定解析 DNS 需要较新的 agent，版本过旧的节点已在下面置灰。</span>
-      </div>
-
-      <div class="row" v-if="type === 'http' && httpMode === 'full'" style="margin-top:14px;gap:16px">
+      <div class="sub-panel row" v-if="type === 'http' && httpMode === 'full'" style="gap:16px">
         <div class="field"><label>方法</label>
           <select v-model="params.http.method"><option v-for="m in ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']" :key="m">{{ m }}</option></select>
         </div>
@@ -453,7 +475,7 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
         <div class="field grow" v-if="isAdmin && !['GET', 'HEAD'].includes(params.http.method)"><label>请求体</label><textarea rows="2" v-model="httpExtra.body" spellcheck="false"></textarea></div>
       </div>
 
-      <div class="row" v-if="showAdvanced" style="margin-top:14px;gap:16px">
+      <div class="sub-panel row" v-if="showAdvanced" style="gap:16px">
         <template v-if="type === 'ping'">
           <div class="field"><label>次数</label><input type="number" min="1" max="100" v-model.number="params.ping.count" /></div>
           <div class="field"><label>间隔 (ms)</label><input type="number" min="100" max="5000" v-model.number="params.ping.interval_ms" /></div>
@@ -530,16 +552,32 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
           <p class="sub" v-if="!isAdmin" style="margin:18px 0 0">游客的持续检测最多 {{ guestContinuous.count }} 次、总时长 {{ guestContinuous.seconds }} 秒，同时只能运行一个。</p>
         </template>
       </div>
+      <div class="probe-footer row">
+        <span class="sub">{{ info.hint }}<template v-if="hasContinuous"> · 持续检测：{{ cont.count }} 次 · {{ cont.interval_ms }} ms</template></span>
+        <span class="spacer"></span>
+        <button class="btn link sm" v-if="type !== 'status'" type="button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">{{ showAdvanced ? '收起高级选项 ▴' : '高级选项 ▾' }}</button>
+      </div>
     </div>
 
     <NodePicker v-show="!zen" v-model="selected" :agents="agents" :type="type" :ip-version="params[type].ip_version || ''" :need-resolver="needResolver" :need-http3="needHttp3" />
 
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
+    </div>
 
     <div class="card" v-if="task">
       <TaskResults :task="task" :results="results" :running="running" v-model:zen="zen" />
     </div>
-    <div class="card empty" v-else-if="opening">正在加载检测结果…</div>
-    <div class="card empty" v-else>{{ type === 'status' ? '点击「发起检测」查询选中节点自身的状态。' : `输入目标并点击「${hasContinuous ? '检测' : '发起检测'}」，各节点结果会实时显示在这里。` }}</div>
+    <div class="workbench-wrap" v-else>
+      <div class="card empty" v-if="opening">正在加载检测结果…</div>
+      <div class="card empty empty-hero" v-else>
+        <div class="empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </svg>
+        </div>
+        <div class="empty-title">{{ type === 'status' ? '点击「发起检测」查询选中节点自身的状态' : '输入目标并点击「发起检测」' }}</div>
+        <div class="sub">{{ type === 'status' ? '返回各节点的系统环境、运行时长、负载、内存与磁盘信息。' : '各节点检测结果、延迟分布与地图着色会实时流式呈现在这里。' }}</div>
+      </div>
+    </div>
   </div>
 </template>

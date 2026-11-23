@@ -132,8 +132,11 @@ const recursive = computed(() => run.stages.recursive)
             <option v-for="a in nodes" :key="a.id" :value="a.id">节点 {{ a.name }}</option>
           </select>
         </div>
-        <button v-if="run.state !== 'running'" class="btn primary" type="submit">开始检测</button>
-        <button v-else class="btn" type="button" @click="cancel">停止</button>
+        <button v-if="run.state !== 'running'" class="btn primary" type="submit">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+          <span>开始检测</span>
+        </button>
+        <button v-else class="btn stop" type="button" @click="cancel">停止</button>
       </div>
       <div class="row" style="margin-top:10px;align-items:flex-end">
         <div class="field" style="flex:1;min-width:260px"><label for="prop-expect">期望值 <span class="sub">可选</span></label>

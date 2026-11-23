@@ -68,14 +68,21 @@ function build() {
 }
 function destroy() { if (plot) { plot.destroy(); plot = null } }
 
+let mq = null
 onMounted(() => {
   build()
   ro = new ResizeObserver(() => { if (plot && el.value) plot.setSize({ width: el.value.clientWidth, height: props.height }) })
   ro.observe(el.value)
-  const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)')
+  mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)')
   if (mq) mq.addEventListener('change', build)
+  window.addEventListener('probe:theme', build)
 })
-onBeforeUnmount(() => { destroy(); if (ro) ro.disconnect() })
+onBeforeUnmount(() => {
+  destroy()
+  if (ro) ro.disconnect()
+  if (mq) mq.removeEventListener('change', build)
+  window.removeEventListener('probe:theme', build)
+})
 watch(() => [props.series, props.hidden], build, { deep: true })
 </script>
 

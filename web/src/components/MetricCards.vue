@@ -61,7 +61,7 @@ const who = (r) => (r ? [r.agent_name, r.place].filter(Boolean).join(' · ') : '
     <div class="metric">
       <div class="stat-label">进度</div>
       <div class="metric-value">{{ finished.length }}<span class="sub"> / {{ rows.length }}</span></div>
-      <div class="sub">已返回节点</div>
+      <div class="metric-progress" aria-hidden="true"><i :style="{ width: (rows.length ? (finished.length / rows.length) * 100 : 0) + '%' }"></i></div>
     </div>
   </div>
 </template>

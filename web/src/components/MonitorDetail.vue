@@ -98,32 +98,36 @@ onBeforeUnmount(() => clearInterval(timer))
     <div class="row top" style="gap:16px">
       <div class="card grow">
         <h3>告警记录</h3>
-        <table class="grid">
-          <thead><tr><th>时间</th><th>节点</th><th></th><th>详情</th></tr></thead>
-          <tbody>
-            <tr v-for="ev in events" :key="ev.id">
-              <td class="sub">{{ fmtTime(ev.at) }}</td>
-              <td>{{ ev.agent }}</td>
-              <td><span class="badge" :class="ev.kind === 'down' ? 'error' : 'ok'">{{ ev.kind === 'down' ? '异常' : '恢复' }}</span></td>
-              <td class="sub" style="white-space:normal">{{ ev.message }}</td>
-            </tr>
-            <tr v-if="!events.length"><td colspan="4" class="empty">暂无告警</td></tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead><tr><th>时间</th><th>节点</th><th></th><th>详情</th></tr></thead>
+            <tbody>
+              <tr v-for="ev in events" :key="ev.id">
+                <td class="sub">{{ fmtTime(ev.at) }}</td>
+                <td>{{ ev.agent }}</td>
+                <td><span class="badge" :class="ev.kind === 'down' ? 'error' : 'ok'">{{ ev.kind === 'down' ? '异常' : '恢复' }}</span></td>
+                <td class="sub" style="white-space:normal">{{ ev.message }}</td>
+              </tr>
+              <tr v-if="!events.length"><td colspan="4" class="empty">暂无告警</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="card grow">
         <h3>最近运行</h3>
-        <table class="grid">
-          <thead><tr><th>时间</th><th class="num">节点数</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="t in runs" :key="t.id" class="clickable" @click="emit('open-history', t.id)">
-              <td class="sub">{{ fmtTime(t.created_at) }}</td>
-              <td class="num">{{ t.agent_ids?.length || 0 }}</td>
-              <td><span class="btn link sm">查看详情</span></td>
-            </tr>
-            <tr v-if="!runs.length"><td colspan="3" class="empty">暂无运行记录</td></tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="grid">
+            <thead><tr><th>时间</th><th class="num">节点数</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="t in runs" :key="t.id" class="clickable" @click="emit('open-history', t.id)">
+                <td class="sub">{{ fmtTime(t.created_at) }}</td>
+                <td class="num">{{ t.agent_ids?.length || 0 }}</td>
+                <td><span class="btn link sm">查看详情</span></td>
+              </tr>
+              <tr v-if="!runs.length"><td colspan="3" class="empty">暂无运行记录</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>

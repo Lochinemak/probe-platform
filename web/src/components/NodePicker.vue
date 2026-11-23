@@ -5,7 +5,7 @@
 //   手动选择  the chips themselves
 // Clicking a chip in the first two modes switches to manual with the current
 // selection as the starting point. The parent still gets a plain Set of ids.
-import { reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { LINES, UNKNOWN_PLACE, placeKey, placeLabel, placeOrder } from '../geo.js'
 
 const props = defineProps({
@@ -144,11 +144,12 @@ function chipSub(a) {
   return [place, g?.line && g.line !== '其他' ? g.line : (a.isp || '')].filter(Boolean).join(' · ')
 }
 const selected = computed(() => new Set(selectedIds.value))
+const folded = ref(false)
 </script>
 
 <template>
   <div class="card">
-    <div class="row" style="margin-bottom:10px">
+    <div class="row" :style="folded ? '' : 'margin-bottom:12px'">
       <h3 style="margin:0">节点 <span class="sub">将使用 {{ selectedIds.length }} 个 / 在线 {{ onlineCount }}</span></h3>
       <span class="spacer"></span>
       <div class="tabs sm" role="group" aria-label="节点范围">
@@ -156,8 +157,10 @@ const selected = computed(() => new Set(selectedIds.value))
         <button type="button" :class="{ active: scope.mode === 'region' }" @click="setMode('region')">按地区</button>
         <button type="button" :class="{ active: scope.mode === 'manual' }" @click="setMode('manual')">手动选择</button>
       </div>
+      <button v-if="agents.length" class="btn sm" type="button" :aria-expanded="!folded" @click="folded = !folded">{{ folded ? '展开节点' : '收起' }}</button>
     </div>
 
+    <template v-if="!folded">
     <div class="row scope-row" v-if="scope.mode === 'region' && (countryOptions.length || unknownCount)">
       <div class="field"><label>节点所在国家或地区</label>
         <select :value="scope.cc" @change="setCountry($event.target.value)">
@@ -198,17 +201,20 @@ const selected = computed(() => new Set(selectedIds.value))
       {{ usable.length ? '当前范围内没有可用的在线节点。' : '没有可用的在线节点。' }}
       <button v-if="usable.length && scope.mode !== 'all'" class="btn link sm" type="button" @click="scope.line = ''; setMode('all')">改用全部节点</button>
     </div>
-    <div v-for="[place, list] in groups" :key="place" class="row" style="margin-bottom:8px">
-      <span class="sub place">{{ place }}</span>
-      <div class="agents-pick">
-        <button v-for="a in list" :key="a.id" type="button" class="chip" :class="{ on: selected.has(a.id), off: !!blocker(a) }" :aria-pressed="selected.has(a.id)" :aria-disabled="!!blocker(a)"
-          :title="blocker(a) || placeLabel(a.geo) || a.location || ''" @click="toggle(a)">
-          <span class="status-dot" :class="{ online: a.online }"></span>
-          {{ a.name }}
-          <span class="sub" v-if="blocker(a) && a.online">{{ blocker(a) }}</span>
-          <span class="sub" v-else-if="chipSub(a)">{{ chipSub(a) }}</span>
-        </button>
+    <div class="node-groups" v-if="groups.length">
+      <div v-for="[place, list] in groups" :key="place" class="node-group">
+        <span class="sub place">{{ place }}</span>
+        <div class="agents-pick">
+          <button v-for="a in list" :key="a.id" type="button" class="chip" :class="{ on: selected.has(a.id), off: !!blocker(a) }" :aria-pressed="selected.has(a.id)" :aria-disabled="!!blocker(a)"
+            :title="blocker(a) || placeLabel(a.geo) || a.location || ''" @click="toggle(a)">
+            <span class="status-dot" :class="{ online: a.online }"></span>
+            {{ a.name }}
+            <span class="sub" v-if="blocker(a) && a.online">{{ blocker(a) }}</span>
+            <span class="sub" v-else-if="chipSub(a)">{{ chipSub(a) }}</span>
+          </button>
+        </div>
       </div>
     </div>
+    </template>
   </div>
 </template>

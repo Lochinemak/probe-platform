@@ -96,65 +96,100 @@ onMounted(loadHere)
 
 <template>
   <div>
-    <div class="row" style="margin-bottom:12px">
-      <div>
-        <h2 style="margin:0">IP 定位</h2>
-        <div class="sub">查询公网 IP 的归属地、运营商和线路类型。位置是 IP 库的估算，不是设备的实际位置。</div>
-      </div>
-    </div>
+    <section class="ip-hero">
+      <h2>
+        <span class="ip-hero-icon" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        </span>
+        IP 定位
+      </h2>
+      <div class="sub">查询公网 IP 的估算地理位置、运营商、自治系统和线路类型。</div>
+    </section>
 
-    <form class="card probe-main" @submit.prevent="lookup()">
-      <div class="target-box" :class="{ invalid: !!error }">
-        <input class="target-input" type="text" v-model="query" placeholder="输入 IPv4 或 IPv6 地址" aria-label="IP 地址" spellcheck="false" autocomplete="off" />
+    <form class="card ip-search-card" @submit.prevent="lookup()">
+      <div class="probe-main">
+        <div class="target-box" :class="{ invalid: !!error }">
+          <span class="target-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
+          <input class="target-input" type="text" v-model="query" placeholder="输入 IPv4 或 IPv6 地址" aria-label="IP 地址" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="probe-actions">
+          <button class="btn primary" type="submit" :disabled="busy">{{ busy ? '查询中…' : '查询' }}</button>
+        </div>
       </div>
-      <div class="probe-actions">
-        <button class="btn primary" type="submit" :disabled="busy">{{ busy ? '查询中…' : '查询' }}</button>
-        <button class="btn outline" type="button" @click="useMine">查询我的 IP</button>
+      <div class="row" style="margin-top:10px;justify-content:flex-end">
+        <span class="field-error" v-if="error" role="alert" style="margin:0;margin-right:auto">{{ error }}</span>
+        <button class="btn link sm" type="button" @click="useMine">查询我的公网 IP</button>
       </div>
-      <div class="field-error" v-if="error" role="alert" style="flex-basis:100%;margin:0">{{ error }}</div>
     </form>
 
     <div class="card" v-if="result">
       <div class="row">
         <h2 class="mono" style="margin:0;font-size:20px">{{ result.ip }}</h2>
-        <span class="badge">IPv{{ result.version }}</span>
+        <span class="badge ok">IPv{{ result.version }}</span>
         <span class="badge warn" v-if="result.kind !== 'public'">{{ kindText[result.kind] }}</span>
       </div>
       <div class="kv ip-kv" v-if="result.kind === 'public'">
-        <div>位置</div><div>{{ result.location || (result.geo ? placeLabel(result.geo) : '未知') }}</div>
-        <div>运营商</div><div>{{ result.isp || '未知' }}<span class="badge" v-if="result.geo?.line" style="margin-left:8px">{{ result.geo.line }}</span></div>
-        <div>ASN</div><div>{{ result.asn || '—' }}</div>
-        <div>网络类型</div><div>{{ result.net_type || '—' }}</div>
-        <div>估算坐标</div><div>{{ coords(result) || '—' }}</div>
-        <div>数据来源</div><div>{{ sourceText[result.source] || '没有查到' }}</div>
+        <div class="ip-tile"><div class="ip-tile-k">位置</div><div class="ip-tile-v">{{ result.location || (result.geo ? placeLabel(result.geo) : '未知') }}</div></div>
+        <div class="ip-tile"><div class="ip-tile-k">运营商</div><div class="ip-tile-v">{{ result.isp || '未知' }} <span class="badge" v-if="result.geo?.line">{{ result.geo.line }}</span></div></div>
+        <div class="ip-tile"><div class="ip-tile-k">ASN</div><div class="ip-tile-v mono">{{ result.asn || '—' }}</div></div>
+        <div class="ip-tile"><div class="ip-tile-k">网络类型</div><div class="ip-tile-v">{{ result.net_type || '—' }}</div></div>
+        <div class="ip-tile"><div class="ip-tile-k">估算坐标</div><div class="ip-tile-v mono">{{ coords(result) || '—' }}</div></div>
+        <div class="ip-tile"><div class="ip-tile-k">数据来源</div><div class="ip-tile-v">{{ sourceText[result.source] || '没有查到' }}</div></div>
       </div>
       <p class="sub" v-else style="margin-bottom:0">{{ result.kind === 'fake_ip' ? '198.18.0.0/15 是 Clash、OpenClash 等透明代理的 fake-IP 地址段，不对应任何真实位置。' : '这是内网、回环或保留地址，没有归属地。' }}</p>
-      <p class="sub" v-if="result.kind === 'public' && !result.asn" style="margin-bottom:0">ASN、网络类型和坐标来自在线查询；离线库已有归属地或在线查询未开启时不显示。</p>
+      <p class="sub" v-if="result.kind === 'public' && !result.asn" style="margin-bottom:0;margin-top:10px">ASN、网络类型和坐标来自在线查询；离线库已有归属地或在线查询未开启时不显示。</p>
     </div>
 
-    <div class="card">
-      <h3>当前浏览器的出口对照</h3>
-      <p class="sub" style="margin-top:0">访问本站用的出口和访问境外站点用的出口分开显示。两者不同，说明网络按目的地分流（常见于代理软件的"国内直连、国外走代理"）。</p>
+    <div style="margin-bottom:16px">
+      <div class="row" style="margin-bottom:12px">
+        <div>
+          <h3 style="margin:0;font-size:16px">当前浏览器出口对照</h3>
+          <div class="sub">访问本站用的出口和访问境外站点用的出口分开显示，用于判断代理按目的地分流。</div>
+        </div>
+      </div>
       <div class="egress">
-        <div class="metric">
-          <div class="stat-label">本站看到的出口</div>
-          <div class="metric-value">{{ here?.ip || '识别中…' }}</div>
+        <div class="egress-card domestic">
+          <div class="egress-head">
+            <div class="egress-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:15px">本站看到的出口</div>
+              <div class="sub">当前浏览器直连本站 IP</div>
+            </div>
+            <span class="spacer"></span>
+            <span class="badge" :class="here ? 'ok' : 'warn'">{{ here ? '已识别' : '识别中' }}</span>
+          </div>
+          <div class="metric-value" style="margin-bottom:6px">{{ here?.ip || '识别中…' }}</div>
           <div class="sub" v-if="here">{{ here.kind === 'public' ? [here.location || placeLabel(here.geo), here.isp].filter(Boolean).join(' · ') || '归属地未知' : kindText[here.kind] }}</div>
         </div>
-        <div class="metric">
-          <div class="stat-label">境外站点看到的出口</div>
+
+        <div class="egress-card overseas">
+          <div class="egress-head">
+            <div class="egress-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:15px">境外站点看到的出口</div>
+              <div class="sub">访问境外通用服务出口 IP</div>
+            </div>
+            <span class="spacer"></span>
+            <span class="badge" :class="abroad ? 'ok' : 'warn'">{{ abroad ? '已识别' : abroadState === 'working' ? '检测中' : '待检测' }}</span>
+          </div>
           <template v-if="abroad">
-            <div class="metric-value">{{ abroad.ip }}</div>
+            <div class="metric-value" style="margin-bottom:6px">{{ abroad.ip }}</div>
             <div class="sub">{{ [abroad.location || placeLabel(abroad.geo), abroad.isp, abroad.net_type].filter(Boolean).join(' · ') || '归属地未知' }} · 经 {{ abroadVia }} 检测</div>
           </template>
           <template v-else>
-            <button class="btn" type="button" style="margin:6px 0" :disabled="abroadState === 'working'" @click="checkAbroad">{{ abroadState === 'working' ? '检测中…' : '检测境外出口' }}</button>
-            <div class="sub">点击后浏览器会直接请求 Cloudflare（失败时改用 ipify）的"我的 IP"接口，对方会看到你的出口地址。不点不会发起。</div>
+            <button class="btn outline" type="button" style="margin:2px 0 8px" :disabled="abroadState === 'working'" @click="checkAbroad">{{ abroadState === 'working' ? '检测中…' : '检测境外出口' }}</button>
+            <div class="sub">点击后浏览器会直接请求 Cloudflare（失败时改用 ipify）的「我的 IP」接口，不点不会发起。</div>
           </template>
         </div>
       </div>
       <div class="error-box" v-if="abroadError" style="margin:12px 0 0">{{ abroadError }}</div>
-      <p v-if="verdict" :class="verdict.same ? 'ok' : 'warn'" style="margin:12px 0 0">{{ verdict.text }}</p>
+      <div class="notice" v-if="verdict" style="margin-top:12px" :style="!verdict.same ? 'background:var(--warn-soft);border-color:var(--warn-border);color:var(--warn)' : ''">
+        <span>{{ verdict.text }}</span>
+      </div>
     </div>
 
     <div class="card" v-if="marks.length && map">

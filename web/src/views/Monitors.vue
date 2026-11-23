@@ -217,11 +217,13 @@ onBeforeUnmount(() => clearInterval(timer))
                 </td>
                 <td class="sub">{{ m.last_run_at ? timeAgo(m.last_run_at) : '-' }}</td>
                 <td>
-                  <button class="btn sm" @click="detailId = m.id">详情</button>
-                  <button class="btn sm" @click="runNow(m)">立即运行</button>
-                  <button class="btn sm" @click="toggleEnabled(m)">{{ m.enabled ? '停用' : '启用' }}</button>
-                  <button class="btn sm" @click="startEdit(m)">编辑</button>
-                  <button class="btn sm danger" @click="remove(m)">删除</button>
+                  <div class="row" style="gap:6px;flex-wrap:nowrap">
+                    <button class="btn sm" @click="detailId = m.id">详情</button>
+                    <button class="btn sm" @click="runNow(m)">立即运行</button>
+                    <button class="btn sm" @click="toggleEnabled(m)">{{ m.enabled ? '停用' : '启用' }}</button>
+                    <button class="btn sm" @click="startEdit(m)">编辑</button>
+                    <button class="btn sm danger" @click="remove(m)">删除</button>
+                  </div>
                 </td>
               </tr>
               <tr v-if="!monitors.length"><td colspan="7" class="empty">还没有监控。新建一个，选好目标、间隔和节点，结果会持续入库并绘制趋势图。</td></tr>
