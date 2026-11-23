@@ -147,6 +147,11 @@ type propOutcome struct {
 
 func runProp(t *testing.T, c *propChecker, req propRequest) propOutcome {
 	t.Helper()
+	if propSpacing > 5*time.Millisecond {
+		old := propSpacing
+		propSpacing = 0
+		t.Cleanup(func() { propSpacing = old })
+	}
 	out := propOutcome{stages: map[string]*propStage{}, rows: map[string]*propRow{}}
 	var mu sync.Mutex
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -332,6 +337,23 @@ func TestPropagationBudget(t *testing.T) {
 	}
 }
 
+// Questions are spaced out rather than sent in one burst.
+func TestPropagationPacing(t *testing.T) {
+	old := propSpacing
+	propSpacing = 5 * time.Millisecond
+	t.Cleanup(func() { propSpacing = old })
+	f := newFakeDNS(false)
+	req, _ := parsePropRequest("www.example.test", "A", "full", "")
+	start := time.Now()
+	out := runProp(t, f.checker(), req)
+	if min := time.Duration(out.sum.Queries-1) * propSpacing; time.Since(start) < min {
+		t.Fatalf("%d questions took %v, less than %v", out.sum.Queries, time.Since(start), min)
+	}
+	if out.sum.Match != 2 || out.sum.Unknown != 1 {
+		t.Fatalf("summary: %+v", out.sum)
+	}
+}
+
 func TestParsePropRequest(t *testing.T) {
 	for _, bad := range [][2]string{{"", "A"}, {"exa mple.com", "A"}, {"example.com/path", "A"}, {"-bad.example.com", "A"}, {"example.com", "ANY"},
 		{"1.2.3.4", "A"}, {strings.Repeat("a", 64) + ".com", "A"}, {"例子.com", "A"}} {
@@ -396,6 +418,9 @@ func sseEvents(t *testing.T, c *http.Client, u string) (int, []propEvent) {
 
 func useFakeDNS(t *testing.T, f *fakeDNS) {
 	t.Helper()
+	oldSpacing := propSpacing
+	propSpacing = 0
+	t.Cleanup(func() { propSpacing = oldSpacing })
 	oe, or, ores, ol := propExchange, propRoots, propResolvers, propLookupHost
 	c := f.checker()
 	propExchange, propRoots, propResolvers, propLookupHost = f.exchange, c.roots, func() []Resolver { return c.resolvers }, c.lookupHost

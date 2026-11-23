@@ -37,7 +37,8 @@ import (
 // exchange goes to port 53 of a public address only (a zone can point its NS
 // records anywhere), at most propMaxQueries exchanges and propDeadline per
 // run, propSlots runs at a time, a few runs a minute per visitor, and a short
-// cache so reloading the page does not run it again.
+// cache so reloading the page does not run it again. Questions leave the
+// server no closer together than propSpacing.
 const (
 	propDeadline    = 20 * time.Second
 	propMaxQueries  = 150
@@ -295,6 +296,39 @@ type propRun struct {
 
 var errPropBudget = errors.New("本次检测的查询次数已用完")
 
+// propSpacing is the least time between two questions leaving the server,
+// across all runs. Sent all at once, a few dozen datagrams from the server's
+// container mostly went unanswered (even by resolvers a few milliseconds
+// away), while fourteen at once always got through; spaced out they do.
+var propSpacing = 40 * time.Millisecond
+
+var propPacer struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// pace waits for this question's turn. It returns false when ctx ends first.
+func pace(ctx context.Context) bool {
+	if propSpacing <= 0 {
+		return ctx.Err() == nil
+	}
+	propPacer.mu.Lock()
+	at := time.Now()
+	if propPacer.next.After(at) {
+		at = propPacer.next
+	}
+	propPacer.next = at.Add(propSpacing)
+	propPacer.mu.Unlock()
+	t := time.NewTimer(time.Until(at))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 // ask sends one question to port 53 of addr.
 func (r *propRun) ask(ctx context.Context, addr, name, typ string, recurse bool, timeout time.Duration) (*probe.DNSMessage, error) {
 	if r.c.publicOnly && !probe.IsPublicIP(net.ParseIP(addr)) {
@@ -302,6 +336,9 @@ func (r *propRun) ask(ctx context.Context, addr, name, typ string, recurse bool,
 	}
 	if r.queries.Add(1) > propMaxQueries {
 		return nil, errPropBudget
+	}
+	if !pace(ctx) {
+		return nil, errors.New("cancelled")
 	}
 	return r.c.exchange(ctx, probe.DNSQuestion{Name: name, Type: typ, Recurse: recurse, Server: net.JoinHostPort(addr, "53"), Timeout: timeout, PublicOnly: r.c.publicOnly})
 }

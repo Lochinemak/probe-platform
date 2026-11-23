@@ -315,6 +315,11 @@ func doHTTP(ctx context.Context, rawURL, method string, p protocol.Params, timeo
 		clock.mu.Lock()
 		a.IP = clock.ip
 		a.FakeIP = clock.fakeIP
+		// No reply to the QUIC handshake is what a server without HTTP/3
+		// looks like, and what a network that drops UDP looks like.
+		if p.HTTP3 && a.Error == "timeout" && !clock.tlsStart.IsZero() && clock.tlsDone.IsZero() {
+			a.Error = "timeout: no reply to the QUIC handshake (the site may not serve HTTP/3, or UDP 443 is blocked on the way)"
+		}
 		clock.mu.Unlock()
 		return a
 	}

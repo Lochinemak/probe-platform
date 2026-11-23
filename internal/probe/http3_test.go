@@ -138,6 +138,16 @@ func TestHTTP3Refusals(t *testing.T) {
 	if _, err := HTTP(ctx, fmt.Sprintf("https://127.0.0.1:%d/hello", port), protocol.Params{HTTP3: true, InsecureTLS: true, PublicOnly: true}, nil); err == nil {
 		t.Fatal("a loopback target was accepted with public_only")
 	}
+	// Nothing listening for QUIC: the error says what that usually means.
+	dead, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close()
+	res, err = HTTP(ctx, fmt.Sprintf("https://%s/", dead.LocalAddr()), protocol.Params{HTTP3: true, InsecureTLS: true, TimeoutMs: 700}, nil)
+	if err != nil || res.Attempts[0].OK || !strings.Contains(res.Attempts[0].Error, "QUIC handshake") {
+		t.Fatalf("silent server: %v %+v", err, res)
+	}
 	found := false
 	for _, c := range DetectCapabilities() {
 		found = found || c == protocol.CapHTTP3
