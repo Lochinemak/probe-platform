@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { timeAgo, fmtTime } from '../fmt.js'
 import { LINES, PROVINCES, COUNTRIES, COMMON_COUNTRIES, OTHER_COUNTRIES, placeLabel } from '../geo.js'
 import Onboarding from '../components/Onboarding.vue'
+import CapChips from '../components/CapChips.vue'
 
 const props = defineProps({
   agentImage: { type: String, default: 'ghcr.io/lochinemak/probe-agent:latest' },
@@ -142,7 +143,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <td><b>{{ a.name }}</b></td>
               <td>{{ a.location || '-' }}</td>
               <td>{{ a.isp || '-' }}</td>
-              <td><span v-for="c in a.capabilities" :key="c" class="badge" style="margin-right:4px">{{ c }}</span></td>
+              <td><CapChips :caps="a.capabilities" /></td>
               <td class="num">{{ a.running || 0 }}</td>
             </tr>
             <tr v-if="!agents.length"><td colspan="6" class="empty">暂无节点</td></tr>
@@ -178,10 +179,7 @@ onBeforeUnmount(() => clearInterval(timer))
               <td class="mono">{{ a.public_ip || '-' }}</td>
               <td class="sub">{{ a.os ? `${a.os}/${a.arch}` : '-' }}</td>
               <td class="sub">{{ a.version }} <span v-if="outdated(a)" class="badge warn" title="与服务端版本不一致，节点重连后会自动更新">待更新</span></td>
-              <td>
-                <span v-for="c in a.capabilities" :key="c" class="badge" :class="{ ok: c === 'icmp_raw' || c === 'mtr' }" style="margin-right:4px">{{ c }}</span>
-                <span v-if="a.capabilities && !a.capabilities.includes('mtr')" class="badge warn" title="没有 raw socket 权限，MTR 不可用">无 MTR</span>
-              </td>
+              <td><CapChips :caps="a.capabilities" /></td>
               <td class="num">{{ a.running || 0 }}</td>
               <td class="sub" :title="a.auth ? fmtTime(a.last_seen) : ''">{{ a.online ? '在线' : (a.auth ? timeAgo(a.last_seen) : '从未连接') }}</td>
               <td style="white-space:nowrap">
