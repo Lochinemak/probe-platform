@@ -345,16 +345,16 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
 </script>
 
 <template>
-  <div>
+  <div class="probe-page">
     <section class="hero" v-if="!task && !zen">
       <div class="hero-badge">分布式多地网络探测节点池</div>
       <h1>全网状态，<span class="hero-accent">一触即测</span></h1>
       <p>瞬时发起多地拨测，覆盖中国大陆各省与全球多地区网络。</p>
     </section>
 
-    <StatCards v-if="!task && !zen" />
+    <StatCards class="probe-stats" v-if="!task && !zen" />
 
-    <div class="workbench-wrap">
+    <div class="workbench-wrap probe-workbench">
     <div class="notice" v-if="lastTask && !task && !zen">
       <span>上次检测：<span class="badge" :class="lastTask.type">{{ TYPE_INFO[lastTask.type]?.label || lastTask.type }}</span> <span class="mono">{{ lastTask.target }}</span> <span class="sub" :title="fmtTime(lastTask.at)">{{ timeAgo(lastTask.at) }}</span></span>
       <span class="spacer"></span>
@@ -564,10 +564,10 @@ onBeforeUnmount(() => { clearInterval(agentTimer); closeStream(); window.removeE
     <div class="error-box" v-if="error" role="alert">{{ error }}</div>
     </div>
 
-    <div class="card" v-if="task">
+    <div class="card probe-results" v-if="task">
       <TaskResults :task="task" :results="results" :running="running" v-model:zen="zen" />
     </div>
-    <div class="workbench-wrap" v-else>
+    <div class="workbench-wrap probe-empty" v-else>
       <div class="card empty" v-if="opening">正在加载检测结果…</div>
       <div class="card empty empty-hero" v-else>
         <div class="empty-icon" aria-hidden="true">

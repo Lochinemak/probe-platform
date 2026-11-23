@@ -59,6 +59,7 @@ function startOver() {
   name.value = loc.value = isp.value = ''
   emit('clear')
 }
+defineExpose({ startOver })
 
 const maskedToken = computed(() => showToken.value ? token.value : '••••••••••••' + token.value.slice(-4))
 function q(s) { s = String(s ?? ''); return /[\s"'$`\\]/.test(s) ? '"' + s.replace(/(["\\$`])/g, '\\$1') + '"' : (s || '""') }

@@ -128,7 +128,7 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
 </script>
 
 <template>
-  <div>
+  <div class="app-shell">
     <div class="topbar-wrap">
       <header class="topbar">
         <button type="button" class="brand" @click="goHome">
@@ -166,17 +166,14 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
             <span>{{ THEME_LABEL[theme] }}</span>
           </button>
           <a class="pill-btn" v-if="sharing" href="/">发起新的探测</a>
-          <template v-else-if="session">
-            <span class="ver-pill" v-if="session.version">v{{ session.version }}</span>
-            <template v-if="session.auth_required">
-              <template v-if="isAdmin">
-                <span class="badge ok" :title="session.user?.via === 'logto' ? '通过 Logto 登录' : '密码登录'">{{ session.user?.name || '管理员' }}</span>
-                <button class="pill-btn" @click="logout">退出</button>
-              </template>
-              <template v-else>
-                <span class="badge">游客</span>
-                <button class="pill-btn" @click="showLogin = true; loginError = ''">管理员登录</button>
-              </template>
+          <template v-else-if="session && session.auth_required">
+            <template v-if="isAdmin">
+              <span class="badge ok" :title="session.user?.via === 'logto' ? '通过 Logto 登录' : '密码登录'">{{ session.user?.name || '管理员' }}</span>
+              <button class="pill-btn" @click="logout">退出</button>
+            </template>
+            <template v-else>
+              <span class="badge">游客</span>
+              <button class="pill-btn" @click="showLogin = true; loginError = ''">管理员登录</button>
             </template>
           </template>
         </div>
@@ -242,5 +239,10 @@ watch(tab, (t) => { if (TABS[t] && t !== 'probe') document.title = `${TABS[t].la
         </div>
       </template>
     </main>
+
+    <footer class="app-footer" v-if="!sharing && session?.version">
+      <span>拨测平台</span>
+      <span class="ver-pill">v{{ session.version }}</span>
+    </footer>
   </div>
 </template>

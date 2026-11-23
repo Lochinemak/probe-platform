@@ -203,7 +203,25 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; line-height: 1
   gap: 16px;
   min-height: 64px;
 }
-.app { max-width: 1280px; margin: 0 auto; padding: 0 20px 56px; }
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.app { width: 100%; max-width: 1280px; margin: 0 auto; padding: 0 20px 40px; flex: 1; }
+.app-footer {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
 
 .brand {
   display: inline-flex;
@@ -300,8 +318,9 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; line-height: 1
   color: var(--muted);
   background: var(--bg-3);
   border: 1px solid var(--border);
-  padding: 3px 9px;
+  padding: 2px 9px;
   border-radius: 999px;
+  white-space: nowrap;
 }
 .pill-btn {
   display: inline-flex;
@@ -1303,7 +1322,7 @@ table.grid td.empty { text-align: center; padding: 36px 16px; color: var(--muted
 .map-credit { text-align: center; margin-top: 6px; font-size: 11px; opacity: 0.8; }
 
 /* 清爽模式 */
-body.zen .topbar-wrap { display: none; }
+body.zen .topbar-wrap, body.zen .app-footer { display: none; }
 body.zen .app { padding-top: 18px; }
 
 /* ==========================================================================
@@ -1490,16 +1509,24 @@ details summary:hover { color: var(--text); }
    Responsive
    ========================================================================== */
 @media (max-width: 900px) {
+  .topbar-wrap { margin-bottom: 12px; }
   .topbar {
     grid-template-columns: auto 1fr;
-    padding: 10px 14px;
-    gap: 10px;
+    padding: 8px 12px;
+    gap: 8px;
+    min-height: 52px;
   }
-  .nav { grid-column: 1 / -1; order: 3; justify-content: flex-start; }
-  .nav button { padding: 0 10px; height: 32px; font-size: 13px; }
-  .app { padding: 0 12px 36px; }
-  .card, .card.probe-form { padding: 14px 15px; }
+  .nav { grid-column: 1 / -1; order: 3; justify-content: flex-start; gap: 2px; }
+  .nav button { padding: 0 9px; height: 30px; font-size: 12.5px; }
+  .app { padding: 0 12px 32px; }
+  .app-footer { padding: 14px 12px 20px; }
+  .card, .card.probe-form { padding: 14px 14px; }
   .stats, .stats.five { grid-template-columns: 1fr 1fr; }
+  .stats.hero-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+  .stats.hero-stats .stat { padding: 10px 8px; }
+  .stats.hero-stats .stat.main { padding: 10px 12px; }
+  .stats.hero-stats .stat-value { font-size: 18px; }
+  .stats.hero-stats .sub { font-size: 11px; }
   .coverage-main, .egress { grid-template-columns: 1fr; }
   .prop-stages { grid-template-columns: 1fr 1fr; }
   .prop-stage { border-bottom: 1px solid var(--border); }
@@ -1511,4 +1538,38 @@ details summary:hover { color: var(--text); }
   .probe-actions .btn { flex: 1; }
   .node-group { flex-direction: column; gap: 6px; }
   .sub.place { padding-top: 0; }
+}
+
+@media (max-width: 768px) {
+  /* Keep target input + primary action comfortably above the fold on mobile */
+  .probe-page { display: flex; flex-direction: column; }
+  .probe-page .hero { order: 1; padding: 2px 0 10px; }
+  .probe-page .hero-badge, .probe-page .hero p { display: none; }
+  .probe-page .hero h1 { font-size: 20px; margin: 0; }
+  .probe-page .probe-workbench { order: 2; width: 100%; }
+  .probe-page .probe-stats { order: 3; width: 100%; }
+  .probe-page .probe-results, .probe-page .probe-empty { order: 4; width: 100%; }
+
+  .probe-head {
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    gap: 6px;
+  }
+  .probe-desc { display: none; }
+  .tabs.types {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    width: 100%;
+    padding: 3px;
+  }
+  .tabs.types::-webkit-scrollbar { display: none; }
+  .tabs.types button { flex: none; padding: 6px 11px; font-size: 13px; }
+
+  .target-box { min-width: 0; flex: 1 1 180px; min-height: 46px; }
+  .target-box .target-input { padding: 9px 4px; font-size: 15px; }
+  .port-input { width: 82px !important; min-height: 46px; font-size: 14px; }
+  .probe-actions .btn { min-height: 44px; padding: 0 16px; font-size: 14.5px; }
+  .probe-net { margin-top: 12px; padding-top: 12px; gap: 10px 12px; }
 }
